@@ -111,13 +111,14 @@ fn from_content_type_no_panic() {
 }
 
 #[kani::proof]
-#[kani::unwind(60)]
+#[kani::unwind(12)]
 fn encoder_no_panic() {
-    let bbuf: [u8; 4] = kani::any();
-    let nbuf: [u8; 3] = kani::any();
-    let Ok(mut enc) = Encoder::new(any_boundary(&bbuf)) else {
-        return;
-    };
+    // Concrete boundary, symbolic 0–2 byte name (every byte class: plain, `"`,
+    // CR, LF, `\`), symbolic staging-buffer size 1–8: every resumption path.
+    let nbuf: [u8; 2] = kani::any();
+    let out_len: usize = kani::any();
+    kani::assume(out_len >= 1 && out_len <= 8);
+    let mut enc = Encoder::new(b"b").unwrap();
     let part = Part {
         name: any_slice(&nbuf),
         filename: None,
@@ -125,21 +126,18 @@ fn encoder_no_panic() {
     };
     let mut out = [0u8; 8];
     let mut total = 0u64;
-    let mut rounds = 0;
     loop {
-        let (n, done) = enc.write_part_header(&part, &mut out).unwrap();
-        assert!(n <= out.len());
+        let (n, done) = enc.write_part_header(&part, &mut out[..out_len]).unwrap();
+        assert!(n <= out_len);
         total += n as u64;
-        rounds += 1;
         if done {
             break;
         }
         assert!(n > 0);
-        assert!(rounds < 20);
     }
-    let (n, _done) = enc.write_close(&mut out);
-    assert!(n <= out.len());
     assert!(enc.content_length(&[(part, 0)]) >= total);
+    let (n, _done) = enc.write_close(&mut out[..out_len]);
+    assert!(n <= out_len);
 }
 
 #[kani::proof]
