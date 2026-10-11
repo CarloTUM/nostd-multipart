@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: Test (stable, all features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --all-features
+      - run: cargo test --no-default-features
+      - run: cargo run --release --features std --example stream_upload
+
+  clippy:
+    name: Clippy + rustfmt + docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-features --all-targets -- -D warnings
+      - run: cargo clippy --no-default-features -- -D warnings
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
+
+  no_std:
+    name: no_std targets (no alloc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf, riscv32imc-unknown-none-elf
+      # The library itself, every feature combination that makes sense on bare metal.
+      - run: cargo build --release --target thumbv7em-none-eabihf --no-default-features
+      - run: cargo build --release --target thumbv7em-none-eabihf --no-default-features --features embedded-io,embedded-io-async
+      - run: cargo build --release --target riscv32imc-unknown-none-elf --no-default-features
+      - run: cargo build --release --target riscv32imc-unknown-none-elf --no-default-features --features embedded-io,embedded-io-async
+      # A no_main binary with no allocator: if the crate used `alloc`, linking
+      # would fail with "no global memory allocator found".
+      - run: cargo build --release
+        working-directory: examples/thumbv7em-mock-flash
+      - run: cargo build --release --target riscv32imc-unknown-none-elf
+        working-directory: examples/thumbv7em-mock-flash
+      # Prove the absence of alloc/std symbols in the library rlib.
+      - run: |
+          set -e
+          ! grep -rl "extern crate alloc" src
+          ! grep -rl "extern crate std" src/parser.rs src/encoder.rs src/disposition.rs src/chars.rs src/error.rs src/io.rs
+
+  msrv:
+    name: MSRV 1.81
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.81
+        with:
+          targets: thumbv7em-none-eabihf
+      - run: cargo build --lib --all-features
+      - run: cargo build --lib --no-default-features --target thumbv7em-none-eabihf
+      - run: cargo build --release
+        working-directory: examples/thumbv7em-mock-flash
+
+  fuzz-smoke:
+    name: Fuzz smoke (60 s per target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - run: |
+          for t in parse_chunked roundtrip headers adapter; do
+            cargo fuzz run "$t" -- -max_total_time=60 -max_len=4096
+          done
+        working-directory: fuzz
+
+  kani:
+    name: Kani proofs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: model-checking/kani-github-action@v1
+        with:
+          args: --all-features
+
+  coverage:
+    name: Coverage gate (100 % lines in src/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo llvm-cov --all-features --fail-under-lines 100

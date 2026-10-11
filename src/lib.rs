@@ -46,9 +46,6 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
-#[cfg(any(test, feature = "std"))]
-extern crate std;
-
 mod chars;
 mod disposition;
 mod encoder;

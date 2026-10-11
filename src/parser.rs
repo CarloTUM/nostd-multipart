@@ -227,8 +227,8 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
         if new_len > LINE {
             return Err(Error::HeaderTooLong); // 5.1
         }
-        if let Some(dst) = self.line.get_mut(self.line_len..new_len) {
-            dst.copy_from_slice(chunk);
+        for (dst, &src) in self.line.iter_mut().skip(self.line_len).zip(chunk) {
+            *dst = src;
         }
         self.line_len = new_len;
         if lf.is_none() {

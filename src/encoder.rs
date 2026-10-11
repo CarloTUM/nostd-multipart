@@ -195,12 +195,17 @@ const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 /// # Errors
 /// [`Error::Boundary`] if `N` is 0 or greater than 70.
 pub fn boundary_from_random<const N: usize>(random: &[u8; N]) -> Result<[u8; N], Error> {
-    if N == 0 || N > 70 {
+    let mut out = [0u8; N];
+    fill_boundary(random, &mut out).map(|()| out)
+}
+
+/// Non-generic worker of [`boundary_from_random`].
+fn fill_boundary(random: &[u8], out: &mut [u8]) -> Result<(), Error> {
+    if random.is_empty() || random.len() > 70 {
         return Err(Error::Boundary);
     }
-    let mut out = [0u8; N];
     for (o, &r) in out.iter_mut().zip(random) {
         *o = ALPHABET.get(usize::from(r & 63)).copied().unwrap_or(b'x');
     }
-    Ok(out)
+    Ok(())
 }

@@ -55,6 +55,11 @@ fuzz_target!(|input: Input<'_>| {
     if input.parts.iter().any(|p| lossy(p.name) || p.filename.is_some_and(lossy)) {
         return;
     }
+    // Keep every header line within the parser's LINE = 512 (escaping triples
+    // bytes at most): longer names are legitimately `HeaderTooLong`.
+    if input.parts.iter().any(|p| p.name.len() > 100 || p.filename.map_or(0, <[u8]>::len) > 100 || p.content_type.map_or(0, <[u8]>::len) > 100) {
+        return;
+    }
     let out_len = (input.out_len as usize).max(1);
     let mut out = vec![0u8; out_len];
     let mut body = Vec::new();
