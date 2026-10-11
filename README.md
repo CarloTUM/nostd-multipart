@@ -163,8 +163,8 @@ runs 1–5 and 9; the rest have their own commands).
 | 3 | Round-trip: proptest encoder → parser over adversarial names/filenames/data                    | `tests/encoder.rs`                     | `cargo test --test encoder`                               |
 | 4 | Differential against `multer` for valid bodies, all chunkings                                  | `tests/proptests.rs`                   | `cargo test --test proptests`                             |
 | 5 | Real clients: curl `-F`, Python `requests`, Node `FormData`; RFC 2046/7578 examples            | `tests/fixtures/`, `tests/vectors.rs`  | `cargo test --test fixtures --test vectors`               |
-| 6 | Fuzzing: 4 libFuzzer targets (chunked parse vs oracle, round-trip, header helpers, io adapter) | `fuzz/`                                | `cd fuzz && cargo +nightly fuzz run <target> -- -max_total_time=600` |
-| 7 | Kani: no panics, `consumed <= len`, progress, for inputs ≤ 16 B and boundaries ≤ 4 B           | `src/kani.rs`                          | `cargo kani --all-features`                               |
+| 6 | Fuzzing: 4 libFuzzer targets (chunked parse vs oracle, round-trip, header helpers, io adapter); last release run: 2.3M / 9.9M / 31.6M / 10.3M executions in 10 min each, no findings | `fuzz/`                                | `cd fuzz && cargo +nightly fuzz run <target> -- -max_total_time=600` |
+| 7 | Kani: no panics, `consumed <= len`, progress; default bounds 12 B input / 3 B boundary (fits 16 GB RAM), `--cfg kani_full` for 16 B / 4 B | `src/kani.rs`                          | `cargo kani --all-features` (full: `RUSTFLAGS="--cfg kani_full" cargo kani --all-features`) |
 | 8 | Coverage: 100 % of lines in `src/`; every `Error` variant produced by a test                   | CI gate                                | `cargo llvm-cov --all-features --fail-under-lines 100`    |
 | 9 | Adversarial cases (DESIGN.md list), `size_of` assertion, `min_buffer` worst case               | `tests/vectors.rs`                     | `cargo test --test vectors`                               |
 
