@@ -86,10 +86,11 @@ jobs:
   kani:
     name: Kani proofs
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      # Default bounds (12-byte inputs, 3-byte boundaries) fit the runner's memory;
-      # the 16/4 bounds need `--cfg kani_full` and a larger machine.
+      # Default harness set (4/6-byte concrete bounds) fits the runner; the
+      # larger rungs need `--cfg kani_full` and a machine with tens of GB.
       - uses: model-checking/kani-github-action@v1
         with:
           args: --all-features

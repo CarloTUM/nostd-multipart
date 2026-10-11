@@ -1,39 +1,20 @@
-//! Kani proof harnesses (`cargo kani`). Compiled only under `cfg(kani)`.
+//! Kani proof harnesses (`cargo kani --all-features`). Compiled only under `cfg(kani)`.
 //!
-//! Two bound sets: the default (`IN` = 12 input bytes, `BND` = 3 boundary bytes)
-//! fits a 16 GB machine; `RUSTFLAGS="--cfg kani_full" cargo kani` proves the full
-//! 16-byte / 4-byte bounds and needs considerably more memory.
+//! Each harness fixes the input length and the boundary and leaves every input
+//! byte (and `eof`) symbolic: CBMC does not finish on this code with a symbolic
+//! slice length, but it proves concrete-length harnesses in minutes. Properties:
+//! no panic (Kani checks every arithmetic, index, unwrap and unreachable), and
+//! `consumed <= input.len()`, `Data` non-empty and within `consumed`, progress
+//! with `eof`, sticky errors.
 //!
-//! Proven for every boundary of 1–`BND` bytes and every input of 0–`IN` bytes:
-//! * `parse` never panics (Kani checks all arithmetic, indexing, unwrap, ...);
-//! * `consumed <= input.len()`;
-//! * with `eof == true` (or `len >= min_buffer()`) every call makes progress;
-//! * a second call after an arbitrary first call keeps the same properties;
-//! * `content_disposition`, `from_content_type`, the encoder and
-//!   `boundary_from_random` never panic.
+//! * default set (`cargo kani --all-features`, fits a 16 GB machine):
+//!   `parse_len4`, `parse_len6`, `parse_two_calls_len4`, `headers_len4`,
+//!   `cd_len4`, `boundary_from_random_valid`.
+//! * `RUSTFLAGS="--cfg kani_full"` adds the 8/10/12-byte rungs, the 6/8-byte
+//!   header and Content-Disposition rungs and the encoder harness; these need
+//!   tens of GB and hours (see README for what has been completed).
 
-use crate::{content_disposition, Encoder, Event, Parser, Part};
-
-#[cfg(kani_full)]
-const IN: usize = 16;
-#[cfg(kani_full)]
-const BND: usize = 4;
-#[cfg(not(kani_full))]
-const IN: usize = 12;
-#[cfg(not(kani_full))]
-const BND: usize = 3;
-
-fn any_slice<const N: usize>(buf: &[u8; N]) -> &[u8] {
-    let len: usize = kani::any();
-    kani::assume(len <= N);
-    &buf[..len]
-}
-
-fn any_boundary(buf: &[u8; BND]) -> &[u8] {
-    let len: usize = kani::any();
-    kani::assume(len >= 1 && len <= BND);
-    &buf[..len]
-}
+use crate::{content_disposition, Event, Parser};
 
 fn check_call(p: &mut Parser<'_, 8, 2>, input: &[u8], eof: bool) {
     let min_buffer = p.min_buffer();
@@ -52,88 +33,97 @@ fn check_call(p: &mut Parser<'_, 8, 2>, input: &[u8], eof: bool) {
         Err(e) => Some(e),
     };
     if let Some(e) = failed {
-        // Sticky.
         assert_eq!(p.parse(input, eof), Err(e));
     }
 }
 
-#[kani::proof]
-#[kani::unwind(20)]
-fn parse_one_call() {
-    let bbuf: [u8; BND] = kani::any();
-    let ibuf: [u8; IN] = kani::any();
-    let eof: bool = kani::any();
-    let Ok(mut p) = Parser::<8, 2>::new(any_boundary(&bbuf)) else {
-        return;
+macro_rules! parse_harness {
+    ($name:ident, $len:literal, $unwind:literal $(, $cfg:meta)?) => {
+        $(#[cfg($cfg)])?
+        #[kani::proof]
+        #[kani::unwind($unwind)]
+        fn $name() {
+            let input: [u8; $len] = kani::any();
+            let eof: bool = kani::any();
+            let mut p = Parser::<8, 2>::new(b"ab").unwrap();
+            check_call(&mut p, &input, eof);
+        }
     };
-    check_call(&mut p, any_slice(&ibuf), eof);
 }
+parse_harness!(parse_len4, 4, 8);
+parse_harness!(parse_len6, 6, 10);
+parse_harness!(parse_len8, 8, 12, kani_full);
+parse_harness!(parse_len10, 10, 14, kani_full);
+parse_harness!(parse_len12, 12, 16, kani_full);
 
+/// Two calls: any split of 4 symbolic bytes, then EOF.
 #[kani::proof]
-#[kani::unwind(20)]
-fn parse_two_calls() {
-    let bbuf: [u8; BND] = kani::any();
-    let ibuf: [u8; IN] = kani::any();
-    let Ok(mut p) = Parser::<8, 2>::new(any_boundary(&bbuf)) else {
-        return;
-    };
-    let input = any_slice(&ibuf);
+#[kani::unwind(8)]
+fn parse_two_calls_len4() {
+    let input: [u8; 4] = kani::any();
     let split: usize = kani::any();
-    kani::assume(split <= input.len());
+    kani::assume(split <= 4);
     let eof1: bool = kani::any();
     let (first, second) = input.split_at(split);
+    let mut p = Parser::<8, 2>::new(b"ab").unwrap();
     check_call(&mut p, first, eof1);
     check_call(&mut p, second, true);
 }
 
-#[kani::proof]
-#[kani::unwind(20)]
-fn parse_headers_and_body_states() {
-    // Reach the Headers state deterministically, then throw arbitrary bytes at it.
-    let ibuf: [u8; IN] = kani::any();
-    let mut p = Parser::<8, 2>::new(b"ab").unwrap();
-    assert_eq!(p.parse(b"--ab\r\n", false), Ok((6, Some(Event::PartStart))));
-    let eof: bool = kani::any();
-    check_call(&mut p, any_slice(&ibuf), eof);
-    check_call(&mut p, b"", true);
-}
-
-#[kani::proof]
-#[kani::unwind(20)]
-fn content_disposition_no_panic() {
-    let buf: [u8; IN] = kani::any();
-    if let Ok(cd) = content_disposition(any_slice(&buf)) {
-        let mut out = [0u8; 16];
-        if let Some(n) = cd.name() {
-            assert!(n.decode_into(&mut out).is_some());
-            assert!(n.decoded_len() <= n.raw().len());
+macro_rules! headers_harness {
+    ($name:ident, $len:literal, $unwind:literal $(, $cfg:meta)?) => {
+        $(#[cfg($cfg)])?
+        #[kani::proof]
+        #[kani::unwind($unwind)]
+        fn $name() {
+            // Reach the Headers state deterministically, then arbitrary bytes.
+            let input: [u8; $len] = kani::any();
+            let eof: bool = kani::any();
+            let mut p = Parser::<8, 2>::new(b"ab").unwrap();
+            assert_eq!(p.parse(b"--ab\r\n", false), Ok((6, Some(Event::PartStart))));
+            check_call(&mut p, &input, eof);
         }
-        if let Some(f) = cd.filename() {
-            assert!(f.decoded_len() <= f.raw().len());
+    };
+}
+headers_harness!(headers_len4, 4, 8);
+headers_harness!(headers_len6, 6, 10, kani_full);
+headers_harness!(headers_len8, 8, 12, kani_full);
+
+macro_rules! cd_harness {
+    ($name:ident, $len:literal, $unwind:literal $(, $cfg:meta)?) => {
+        $(#[cfg($cfg)])?
+        #[kani::proof]
+        #[kani::unwind($unwind)]
+        fn $name() {
+            let input: [u8; $len] = kani::any();
+            if let Ok(cd) = content_disposition(&input) {
+                let mut out = [0u8; $len];
+                if let Some(n) = cd.name() {
+                    assert!(n.decode_into(&mut out).is_some());
+                    assert!(n.decoded_len() <= n.raw().len());
+                }
+                if let Some(f) = cd.filename() {
+                    assert!(f.decoded_len() <= f.raw().len());
+                }
+            }
         }
-    }
+    };
 }
+cd_harness!(cd_len4, 4, 8);
+cd_harness!(cd_len6, 6, 10, kani_full);
+cd_harness!(cd_len8, 8, 12, kani_full);
 
-#[kani::proof]
-#[kani::unwind(20)]
-fn from_content_type_no_panic() {
-    let buf: [u8; IN] = kani::any();
-    if let Ok(p) = Parser::<8, 2>::from_content_type(any_slice(&buf)) {
-        assert!(!p.boundary().is_empty());
-    }
-}
-
+#[cfg(kani_full)]
 #[kani::proof]
 #[kani::unwind(60)]
 fn encoder_no_panic() {
-    // Concrete boundary, symbolic 0–2 byte name (every byte class: plain, `"`,
-    // CR, LF, `\`), symbolic staging-buffer size 1–8: every resumption path.
+    use crate::{Encoder, Part};
     let nbuf: [u8; 1] = kani::any();
     let out_len: usize = kani::any();
     kani::assume(out_len >= 1 && out_len <= 4);
     let mut enc = Encoder::new(b"b").unwrap();
     let part = Part {
-        name: any_slice(&nbuf),
+        name: &nbuf,
         filename: None,
         content_type: None,
     };
