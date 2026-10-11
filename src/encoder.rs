@@ -47,7 +47,11 @@ impl<'b> Encoder<'b> {
         if !is_valid_boundary(boundary) {
             return Err(Error::Boundary);
         }
-        Ok(Self { boundary, first: true, pos: 0 })
+        Ok(Self {
+            boundary,
+            first: true,
+            pos: 0,
+        })
     }
 
     /// The boundary.
@@ -63,11 +67,22 @@ impl<'b> Encoder<'b> {
     ///
     /// # Errors
     /// [`Error::Header`] if `part.content_type` contains CR or LF.
-    pub fn write_part_header(&mut self, part: &Part<'_>, out: &mut [u8]) -> Result<(usize, bool), Error> {
-        if part.content_type.is_some_and(|ct| ct.iter().any(|&b| b == b'\r' || b == b'\n')) {
+    pub fn write_part_header(
+        &mut self,
+        part: &Part<'_>,
+        out: &mut [u8],
+    ) -> Result<(usize, bool), Error> {
+        if part
+            .content_type
+            .is_some_and(|ct| ct.iter().any(|&b| b == b'\r' || b == b'\n'))
+        {
             return Err(Error::Header);
         }
-        let (written, done) = copy_stream(part_header_bytes(self.boundary, self.first, part), &mut self.pos, out);
+        let (written, done) = copy_stream(
+            part_header_bytes(self.boundary, self.first, part),
+            &mut self.pos,
+            out,
+        );
         if done {
             self.first = false;
         }
@@ -129,8 +144,16 @@ fn escape(b: u8) -> Esc {
         b'"' => Esc::new(*b"%22"),
         b'\r' => Esc::new(*b"%0D"),
         b'\n' => Esc::new(*b"%0A"),
-        b'\\' => Esc { buf: *b"\\\\\0", len: 2, idx: 0 },
-        other => Esc { buf: [other, 0, 0], len: 1, idx: 0 },
+        b'\\' => Esc {
+            buf: *b"\\\\\0",
+            len: 2,
+            idx: 0,
+        },
+        other => Esc {
+            buf: [other, 0, 0],
+            len: 1,
+            idx: 0,
+        },
     }
 }
 
@@ -143,7 +166,11 @@ struct Esc {
 
 impl Esc {
     const fn new(buf: [u8; 3]) -> Self {
-        Esc { buf, len: 3, idx: 0 }
+        Esc {
+            buf,
+            len: 3,
+            idx: 0,
+        }
     }
 }
 
@@ -160,7 +187,11 @@ impl Iterator for Esc {
 }
 
 /// The byte stream of a part's prefix (§11).
-fn part_header_bytes<'a>(boundary: &'a [u8], first: bool, part: &Part<'a>) -> impl Iterator<Item = u8> + 'a {
+fn part_header_bytes<'a>(
+    boundary: &'a [u8],
+    first: bool,
+    part: &Part<'a>,
+) -> impl Iterator<Item = u8> + 'a {
     let lead: &'static [u8] = if first { b"" } else { b"\r\n" };
     bytes(lead)
         .chain(bytes(b"--"))
@@ -168,23 +199,25 @@ fn part_header_bytes<'a>(boundary: &'a [u8], first: bool, part: &Part<'a>) -> im
         .chain(bytes(b"\r\nContent-Disposition: form-data; name=\""))
         .chain(bytes(part.name).flat_map(escape))
         .chain(bytes(b"\""))
-        .chain(
-            part.filename
-                .into_iter()
-                .flat_map(|f| bytes(b"; filename=\"").chain(bytes(f).flat_map(escape)).chain(bytes(b"\""))),
-        )
+        .chain(part.filename.into_iter().flat_map(|f| {
+            bytes(b"; filename=\"")
+                .chain(bytes(f).flat_map(escape))
+                .chain(bytes(b"\""))
+        }))
         .chain(bytes(b"\r\n"))
-        .chain(
-            part.content_type
-                .into_iter()
-                .flat_map(|ct| bytes(b"Content-Type: ").chain(bytes(ct)).chain(bytes(b"\r\n"))),
-        )
+        .chain(part.content_type.into_iter().flat_map(|ct| {
+            bytes(b"Content-Type: ")
+                .chain(bytes(ct))
+                .chain(bytes(b"\r\n"))
+        }))
         .chain(bytes(b"\r\n"))
 }
 
 /// The byte stream of the close delimiter line.
 fn close_bytes(boundary: &[u8]) -> impl Iterator<Item = u8> + '_ {
-    bytes(b"\r\n--").chain(bytes(boundary)).chain(bytes(b"--\r\n"))
+    bytes(b"\r\n--")
+        .chain(bytes(boundary))
+        .chain(bytes(b"--\r\n"))
 }
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";

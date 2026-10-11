@@ -34,7 +34,8 @@ impl Collector {
     /// Flushes pending data (call before reading `events` after an error).
     pub fn finish(&mut self) {
         if !self.pending.is_empty() {
-            self.events.push(OEvent::Data(std::mem::take(&mut self.pending)));
+            self.events
+                .push(OEvent::Data(std::mem::take(&mut self.pending)));
         }
     }
 
@@ -47,11 +48,14 @@ impl Collector {
             }
             other => {
                 if !self.pending.is_empty() {
-                    self.events.push(OEvent::Data(std::mem::take(&mut self.pending)));
+                    self.events
+                        .push(OEvent::Data(std::mem::take(&mut self.pending)));
                 }
                 match other {
                     Event::PartStart => self.events.push(OEvent::PartStart),
-                    Event::Header { name, value } => self.events.push(OEvent::Header(name.to_vec(), value.to_vec())),
+                    Event::Header { name, value } => self
+                        .events
+                        .push(OEvent::Header(name.to_vec(), value.to_vec())),
                     Event::HeadersEnd => {
                         self.in_body = true;
                         self.events.push(OEvent::HeadersEnd);
@@ -76,7 +80,11 @@ pub fn run_chunked<const LINE: usize, const MAX_HEADERS: usize>(
     body: &[u8],
     chunks: &[usize],
 ) -> (Vec<OEvent>, Option<OError>) {
-    assert_eq!(chunks.iter().sum::<usize>(), body.len(), "chunks must cover body");
+    assert_eq!(
+        chunks.iter().sum::<usize>(),
+        body.len(),
+        "chunks must cover body"
+    );
     let mut parser = match Parser::<LINE, MAX_HEADERS>::new(boundary) {
         Ok(p) => p,
         Err(e) => return (Vec::new(), Some(oerr(e))),
@@ -96,7 +104,12 @@ pub fn run_chunked<const LINE: usize, const MAX_HEADERS: usize>(
         let step: Result<(usize, bool, bool), Error> = match parser.parse(&buf, eof) {
             Err(e) => Err(e),
             Ok((consumed, ev)) => {
-                assert!(consumed <= buf.len(), "consumed {} > len {}", consumed, buf.len());
+                assert!(
+                    consumed <= buf.len(),
+                    "consumed {} > len {}",
+                    consumed,
+                    buf.len()
+                );
                 if buf.len() >= min_buffer || eof {
                     assert!(
                         consumed > 0 || ev.is_some(),
@@ -108,7 +121,10 @@ pub fn run_chunked<const LINE: usize, const MAX_HEADERS: usize>(
                 }
                 if let Some(Event::Data(d)) = ev {
                     let p = d.as_ptr_range();
-                    assert!(range.start <= p.start && p.end <= range.end, "Data is not a slice of input");
+                    assert!(
+                        range.start <= p.start && p.end <= range.end,
+                        "Data is not a slice of input"
+                    );
                     assert!(d.len() <= consumed, "Data longer than consumed");
                 }
                 let finished = matches!(ev, Some(Event::Finished));
@@ -151,7 +167,10 @@ pub fn run_chunked<const LINE: usize, const MAX_HEADERS: usize>(
 }
 
 /// Whole body in one chunk.
-pub fn run_whole<const LINE: usize, const MAX_HEADERS: usize>(boundary: &[u8], body: &[u8]) -> (Vec<OEvent>, Option<OError>) {
+pub fn run_whole<const LINE: usize, const MAX_HEADERS: usize>(
+    boundary: &[u8],
+    body: &[u8],
+) -> (Vec<OEvent>, Option<OError>) {
     run_chunked::<LINE, MAX_HEADERS>(boundary, body, &[body.len()])
 }
 
@@ -165,7 +184,12 @@ pub fn check_against_oracle<const LINE: usize, const MAX_HEADERS: usize>(
     let expected = oracle::parse(boundary, body, LINE, MAX_HEADERS);
     for ch in chunkings {
         let got = run_chunked::<LINE, MAX_HEADERS>(boundary, body, ch);
-        assert_eq!(got, expected, "chunking {ch:?} of body {:?} differs from oracle", String::from_utf8_lossy(body));
+        assert_eq!(
+            got,
+            expected,
+            "chunking {ch:?} of body {:?} differs from oracle",
+            String::from_utf8_lossy(body)
+        );
     }
     expected
 }

@@ -25,9 +25,19 @@ fn chunkings_for(len: usize) -> Vec<Vec<usize>> {
 }
 
 /// Checks parser (every chunking) == oracle == hand-written expectation.
-fn check<const LINE: usize, const MAX: usize>(boundary: &[u8], body: &[u8], events: Vec<OEvent>, err: Option<OError>) {
+fn check<const LINE: usize, const MAX: usize>(
+    boundary: &[u8],
+    body: &[u8],
+    events: Vec<OEvent>,
+    err: Option<OError>,
+) {
     let got = check_against_oracle::<LINE, MAX>(boundary, body, &chunkings_for(body.len()));
-    assert_eq!(got, (events, err), "body {:?}", String::from_utf8_lossy(body));
+    assert_eq!(
+        got,
+        (events, err),
+        "body {:?}",
+        String::from_utf8_lossy(body)
+    );
 }
 fn ok(boundary: &[u8], body: &[u8], events: Vec<OEvent>) {
     check::<64, 8>(boundary, body, events, None);
@@ -159,9 +169,28 @@ fn zero_parts() {
 
 #[test]
 fn one_part_minimal() {
-    ok(b"b", b"--b\r\n\r\n\r\n--b--", vec![PartStart, HeadersEnd, PartEnd, Finished]);
-    ok(b"b", b"--b\r\n\r\nx\r\n--b--", vec![PartStart, HeadersEnd, d(b"x"), PartEnd, Finished]);
-    ok(b"b", b"--b\r\nA:1\r\n\r\nx\r\n--b--", vec![PartStart, h("A", "1"), HeadersEnd, d(b"x"), PartEnd, Finished]);
+    ok(
+        b"b",
+        b"--b\r\n\r\n\r\n--b--",
+        vec![PartStart, HeadersEnd, PartEnd, Finished],
+    );
+    ok(
+        b"b",
+        b"--b\r\n\r\nx\r\n--b--",
+        vec![PartStart, HeadersEnd, d(b"x"), PartEnd, Finished],
+    );
+    ok(
+        b"b",
+        b"--b\r\nA:1\r\n\r\nx\r\n--b--",
+        vec![
+            PartStart,
+            h("A", "1"),
+            HeadersEnd,
+            d(b"x"),
+            PartEnd,
+            Finished,
+        ],
+    );
 }
 
 #[test]
@@ -169,12 +198,24 @@ fn two_parts_minimal() {
     ok(
         b"b",
         b"--b\r\n\r\nx\r\n--b\r\n\r\ny\r\n--b--",
-        vec![PartStart, HeadersEnd, d(b"x"), PartEnd, PartStart, HeadersEnd, d(b"y"), PartEnd, Finished],
+        vec![
+            PartStart,
+            HeadersEnd,
+            d(b"x"),
+            PartEnd,
+            PartStart,
+            HeadersEnd,
+            d(b"y"),
+            PartEnd,
+            Finished,
+        ],
     );
     ok(
         b"b",
         b"--b\r\n\r\n\r\n--b\r\n\r\n\r\n--b--",
-        vec![PartStart, HeadersEnd, PartEnd, PartStart, HeadersEnd, PartEnd, Finished],
+        vec![
+            PartStart, HeadersEnd, PartEnd, PartStart, HeadersEnd, PartEnd, Finished,
+        ],
     );
 }
 
@@ -184,7 +225,11 @@ fn first_delimiter_needs_crlf_unless_at_offset_zero() {
     // "\r\n--b--" is a close delimiter => zero parts.
     ok(b"b", b"xx--b\r\n\r\nd\r\n--b--", vec![Finished]);
     // Preamble followed by CRLF then dash-boundary.
-    ok(b"b", b"pre\r\n--b\r\n\r\nx\r\n--b--", vec![PartStart, HeadersEnd, d(b"x"), PartEnd, Finished]);
+    ok(
+        b"b",
+        b"pre\r\n--b\r\n\r\nx\r\n--b--",
+        vec![PartStart, HeadersEnd, d(b"x"), PartEnd, Finished],
+    );
     // LF-only is not a line break: nothing is ever a delimiter.
     fails(b"b", b"--b\n\n--b--", vec![], OError::UnexpectedEof);
 }
@@ -198,33 +243,101 @@ fn lf_only_preamble_then_close() {
 
 #[test]
 fn close_without_trailing_crlf_at_eof() {
-    ok(b"ab", b"--ab\r\n\r\nxy\r\n--ab--", vec![PartStart, HeadersEnd, d(b"xy"), PartEnd, Finished]);
+    ok(
+        b"ab",
+        b"--ab\r\n\r\nxy\r\n--ab--",
+        vec![PartStart, HeadersEnd, d(b"xy"), PartEnd, Finished],
+    );
 }
 
 #[test]
 fn padding_after_boundary() {
-    ok(b"b", b"--b \r\n\r\nx\r\n--b\t\r\n\r\n\r\n--b--", vec![PartStart, HeadersEnd, d(b"x"), PartEnd, PartStart, HeadersEnd, PartEnd, Finished]);
-    ok(b"b", b"--b \t \t \t \t\r\n\r\n\r\n--b--", vec![PartStart, HeadersEnd, PartEnd, Finished]); // 8 bytes
-    // 9 padding bytes: not a delimiter (rule 3), so the whole thing is preamble.
-    fails(b"b", b"--b         \r\n\r\n\r\n--b", vec![], OError::UnexpectedEof);
+    ok(
+        b"b",
+        b"--b \r\n\r\nx\r\n--b\t\r\n\r\n\r\n--b--",
+        vec![
+            PartStart,
+            HeadersEnd,
+            d(b"x"),
+            PartEnd,
+            PartStart,
+            HeadersEnd,
+            PartEnd,
+            Finished,
+        ],
+    );
+    ok(
+        b"b",
+        b"--b \t \t \t \t\r\n\r\n\r\n--b--",
+        vec![PartStart, HeadersEnd, PartEnd, Finished],
+    ); // 8 bytes
+       // 9 padding bytes: not a delimiter (rule 3), so the whole thing is preamble.
+    fails(
+        b"b",
+        b"--b         \r\n\r\n\r\n--b",
+        vec![],
+        OError::UnexpectedEof,
+    );
 }
 
 #[test]
 fn padding_then_non_crlf_is_data() {
-    ok(b"b", b"--b\r\n\r\nx\r\n--b  y\r\n--b--", vec![PartStart, HeadersEnd, d(b"x\r\n--b  y"), PartEnd, Finished]);
+    ok(
+        b"b",
+        b"--b\r\n\r\nx\r\n--b  y\r\n--b--",
+        vec![PartStart, HeadersEnd, d(b"x\r\n--b  y"), PartEnd, Finished],
+    );
 }
 
 #[test]
 fn boundary_prefix_of_longer_token_is_data() {
-    ok(b"abc", b"--abc\r\n\r\nx\r\n--abcdef\r\ny\r\n--abc--", vec![PartStart, HeadersEnd, d(b"x\r\n--abcdef\r\ny"), PartEnd, Finished]);
-    ok(b"abc", b"--abc\r\n\r\nx\r\n--abc-x\r\n--abc--", vec![PartStart, HeadersEnd, d(b"x\r\n--abc-x"), PartEnd, Finished]);
-    ok(b"abc", b"--abc\r\n\r\nx\r\n--abc\rz\r\n--abc--", vec![PartStart, HeadersEnd, d(b"x\r\n--abc\rz"), PartEnd, Finished]);
-    ok(b"abc", b"--abc\r\n\r\nx\r\n--ab\r\n--abc--", vec![PartStart, HeadersEnd, d(b"x\r\n--ab"), PartEnd, Finished]);
+    ok(
+        b"abc",
+        b"--abc\r\n\r\nx\r\n--abcdef\r\ny\r\n--abc--",
+        vec![
+            PartStart,
+            HeadersEnd,
+            d(b"x\r\n--abcdef\r\ny"),
+            PartEnd,
+            Finished,
+        ],
+    );
+    ok(
+        b"abc",
+        b"--abc\r\n\r\nx\r\n--abc-x\r\n--abc--",
+        vec![PartStart, HeadersEnd, d(b"x\r\n--abc-x"), PartEnd, Finished],
+    );
+    ok(
+        b"abc",
+        b"--abc\r\n\r\nx\r\n--abc\rz\r\n--abc--",
+        vec![
+            PartStart,
+            HeadersEnd,
+            d(b"x\r\n--abc\rz"),
+            PartEnd,
+            Finished,
+        ],
+    );
+    ok(
+        b"abc",
+        b"--abc\r\n\r\nx\r\n--ab\r\n--abc--",
+        vec![PartStart, HeadersEnd, d(b"x\r\n--ab"), PartEnd, Finished],
+    );
 }
 
 #[test]
 fn crlf_dash_dash_without_boundary_is_data() {
-    ok(b"bnd", b"--bnd\r\n\r\na\r\n--x\r\n--\r\nb\r\n--bnd--", vec![PartStart, HeadersEnd, d(b"a\r\n--x\r\n--\r\nb"), PartEnd, Finished]);
+    ok(
+        b"bnd",
+        b"--bnd\r\n\r\na\r\n--x\r\n--\r\nb\r\n--bnd--",
+        vec![
+            PartStart,
+            HeadersEnd,
+            d(b"a\r\n--x\r\n--\r\nb"),
+            PartEnd,
+            Finished,
+        ],
+    );
 }
 
 #[test]
@@ -234,13 +347,23 @@ fn every_prefix_of_delimiter_inside_data() {
     ok(
         b"ab",
         b"--ab\r\n\r\n\rX\r\nX\r\n-X\r\n--X\r\n--aX\r\n--ab--",
-        vec![PartStart, HeadersEnd, d(b"\rX\r\nX\r\n-X\r\n--X\r\n--aX"), PartEnd, Finished],
+        vec![
+            PartStart,
+            HeadersEnd,
+            d(b"\rX\r\nX\r\n-X\r\n--X\r\n--aX"),
+            PartEnd,
+            Finished,
+        ],
     );
 }
 
 #[test]
 fn lf_in_data_is_data() {
-    ok(b"b", b"--b\r\n\r\n\n\n\n--b\n\r\n--b--", vec![PartStart, HeadersEnd, d(b"\n\n\n--b\n"), PartEnd, Finished]);
+    ok(
+        b"b",
+        b"--b\r\n\r\n\n\n\n--b\n\r\n--b--",
+        vec![PartStart, HeadersEnd, d(b"\n\n\n--b\n"), PartEnd, Finished],
+    );
 }
 
 #[test]
@@ -251,51 +374,191 @@ fn eof_cases() {
     fails(b"b", b"--b\r", vec![], OError::UnexpectedEof);
     fails(b"b", b"--b\r\n", vec![PartStart], OError::UnexpectedEof);
     fails(b"b", b"--b\r\nA: 1", vec![PartStart], OError::UnexpectedEof);
-    fails(b"b", b"--b\r\nA: 1\r\n", vec![PartStart, h("A", "1")], OError::UnexpectedEof);
-    fails(b"b", b"--b\r\nA: 1\r\n\r\n", vec![PartStart, h("A", "1"), HeadersEnd], OError::UnexpectedEof);
-    fails(b"b", b"--b\r\n\r\nxyz", vec![PartStart, HeadersEnd, d(b"xyz")], OError::UnexpectedEof);
-    fails(b"b", b"--b\r\n\r\nxyz\r\n--b", vec![PartStart, HeadersEnd, d(b"xyz\r\n--b")], OError::UnexpectedEof);
-    fails(b"b", b"--b\r\n\r\nxyz\r\n--b-", vec![PartStart, HeadersEnd, d(b"xyz\r\n--b-")], OError::UnexpectedEof);
-    fails(b"b", b"--b\r\n\r\nxyz\r\n--b\r", vec![PartStart, HeadersEnd, d(b"xyz\r\n--b\r")], OError::UnexpectedEof);
-    fails(b"b", b"--b\r\n\r\nxyz\r\n--b \r\n", vec![PartStart, HeadersEnd, d(b"xyz"), PartEnd, PartStart], OError::UnexpectedEof);
+    fails(
+        b"b",
+        b"--b\r\nA: 1\r\n",
+        vec![PartStart, h("A", "1")],
+        OError::UnexpectedEof,
+    );
+    fails(
+        b"b",
+        b"--b\r\nA: 1\r\n\r\n",
+        vec![PartStart, h("A", "1"), HeadersEnd],
+        OError::UnexpectedEof,
+    );
+    fails(
+        b"b",
+        b"--b\r\n\r\nxyz",
+        vec![PartStart, HeadersEnd, d(b"xyz")],
+        OError::UnexpectedEof,
+    );
+    fails(
+        b"b",
+        b"--b\r\n\r\nxyz\r\n--b",
+        vec![PartStart, HeadersEnd, d(b"xyz\r\n--b")],
+        OError::UnexpectedEof,
+    );
+    fails(
+        b"b",
+        b"--b\r\n\r\nxyz\r\n--b-",
+        vec![PartStart, HeadersEnd, d(b"xyz\r\n--b-")],
+        OError::UnexpectedEof,
+    );
+    fails(
+        b"b",
+        b"--b\r\n\r\nxyz\r\n--b\r",
+        vec![PartStart, HeadersEnd, d(b"xyz\r\n--b\r")],
+        OError::UnexpectedEof,
+    );
+    fails(
+        b"b",
+        b"--b\r\n\r\nxyz\r\n--b \r\n",
+        vec![PartStart, HeadersEnd, d(b"xyz"), PartEnd, PartStart],
+        OError::UnexpectedEof,
+    );
     fails(b"b", b"pre", vec![], OError::UnexpectedEof);
     fails(b"b", b"pre\r\n--b-", vec![], OError::UnexpectedEof);
 }
 
 #[test]
 fn header_errors() {
-    fails(b"b", b"--b\r\nA: 1\n\r\n\r\n--b--", vec![PartStart], OError::Header); // bare LF
+    fails(
+        b"b",
+        b"--b\r\nA: 1\n\r\n\r\n--b--",
+        vec![PartStart],
+        OError::Header,
+    ); // bare LF
     fails(b"b", b"--b\r\n\n\r\n--b--", vec![PartStart], OError::Header); // bare LF as empty line
-    fails(b"b", b"--b\r\nA: 1\r\n b\r\n\r\n--b--", vec![PartStart, h("A", "1")], OError::Header); // obs-fold
-    fails(b"b", b"--b\r\n\tA: 1\r\n\r\n--b--", vec![PartStart], OError::Header); // leading HTAB
-    fails(b"b", b"--b\r\nnocolon\r\n\r\n--b--", vec![PartStart], OError::Header);
-    fails(b"b", b"--b\r\n: v\r\n\r\n--b--", vec![PartStart], OError::Header); // empty name
-    fails(b"b", b"--b\r\nA B: v\r\n\r\n--b--", vec![PartStart], OError::Header); // SP in name
-    fails(b"b", b"--b\r\nA : v\r\n\r\n--b--", vec![PartStart], OError::Header); // SP before colon
-    fails(b"b", b"--b\r\nA\xc3\xa9: v\r\n\r\n--b--", vec![PartStart], OError::Header); // non-ASCII name
-    fails(b"b", b"--b\r\nA: 1\r2\r\n\r\n--b--", vec![PartStart], OError::Header); // CR in value
-    fails(b"b", b"--b\r\nA: 1\r\r\n\r\n--b--", vec![PartStart], OError::Header); // CR before CRLF
-    fails(b"b", b"--b\r\nA:\r\r\n\r\n--b--", vec![PartStart], OError::Header);
-    fails(b"b", b"--b\r\n--b--\r\n\r\n--b--", vec![PartStart], OError::Header); // boundary line as header: no colon
-    // "--b" is a valid token, so this is a header; the final "--b--" has no CRLF
-    // before it and is data.
-    fails(b"b", b"--b\r\n--b: x\r\n\r\n--b--", vec![PartStart, h("--b", "x"), HeadersEnd, d(b"--b--")], OError::UnexpectedEof);
-    ok(b"b", b"--b\r\n--b: x\r\n\r\n\r\n--b--", vec![PartStart, h("--b", "x"), HeadersEnd, PartEnd, Finished]);
+    fails(
+        b"b",
+        b"--b\r\nA: 1\r\n b\r\n\r\n--b--",
+        vec![PartStart, h("A", "1")],
+        OError::Header,
+    ); // obs-fold
+    fails(
+        b"b",
+        b"--b\r\n\tA: 1\r\n\r\n--b--",
+        vec![PartStart],
+        OError::Header,
+    ); // leading HTAB
+    fails(
+        b"b",
+        b"--b\r\nnocolon\r\n\r\n--b--",
+        vec![PartStart],
+        OError::Header,
+    );
+    fails(
+        b"b",
+        b"--b\r\n: v\r\n\r\n--b--",
+        vec![PartStart],
+        OError::Header,
+    ); // empty name
+    fails(
+        b"b",
+        b"--b\r\nA B: v\r\n\r\n--b--",
+        vec![PartStart],
+        OError::Header,
+    ); // SP in name
+    fails(
+        b"b",
+        b"--b\r\nA : v\r\n\r\n--b--",
+        vec![PartStart],
+        OError::Header,
+    ); // SP before colon
+    fails(
+        b"b",
+        b"--b\r\nA\xc3\xa9: v\r\n\r\n--b--",
+        vec![PartStart],
+        OError::Header,
+    ); // non-ASCII name
+    fails(
+        b"b",
+        b"--b\r\nA: 1\r2\r\n\r\n--b--",
+        vec![PartStart],
+        OError::Header,
+    ); // CR in value
+    fails(
+        b"b",
+        b"--b\r\nA: 1\r\r\n\r\n--b--",
+        vec![PartStart],
+        OError::Header,
+    ); // CR before CRLF
+    fails(
+        b"b",
+        b"--b\r\nA:\r\r\n\r\n--b--",
+        vec![PartStart],
+        OError::Header,
+    );
+    fails(
+        b"b",
+        b"--b\r\n--b--\r\n\r\n--b--",
+        vec![PartStart],
+        OError::Header,
+    ); // boundary line as header: no colon
+       // "--b" is a valid token, so this is a header; the final "--b--" has no CRLF
+       // before it and is data.
+    fails(
+        b"b",
+        b"--b\r\n--b: x\r\n\r\n--b--",
+        vec![PartStart, h("--b", "x"), HeadersEnd, d(b"--b--")],
+        OError::UnexpectedEof,
+    );
+    ok(
+        b"b",
+        b"--b\r\n--b: x\r\n\r\n\r\n--b--",
+        vec![PartStart, h("--b", "x"), HeadersEnd, PartEnd, Finished],
+    );
 }
 
 #[test]
 fn header_values() {
-    ok(b"b", b"--b\r\nA:\r\n\r\n\r\n--b--", vec![PartStart, h("A", ""), HeadersEnd, PartEnd, Finished]);
-    ok(b"b", b"--b\r\nA: \t \r\n\r\n\r\n--b--", vec![PartStart, h("A", ""), HeadersEnd, PartEnd, Finished]);
-    ok(b"b", b"--b\r\nA:\t x \t\r\n\r\n\r\n--b--", vec![PartStart, h("A", "x"), HeadersEnd, PartEnd, Finished]);
-    ok(b"b", b"--b\r\nA: x  y\r\n\r\n\r\n--b--", vec![PartStart, h("A", "x  y"), HeadersEnd, PartEnd, Finished]);
-    ok(b"b", b"--b\r\nA: a:b:c\r\n\r\n\r\n--b--", vec![PartStart, h("A", "a:b:c"), HeadersEnd, PartEnd, Finished]);
+    ok(
+        b"b",
+        b"--b\r\nA:\r\n\r\n\r\n--b--",
+        vec![PartStart, h("A", ""), HeadersEnd, PartEnd, Finished],
+    );
+    ok(
+        b"b",
+        b"--b\r\nA: \t \r\n\r\n\r\n--b--",
+        vec![PartStart, h("A", ""), HeadersEnd, PartEnd, Finished],
+    );
+    ok(
+        b"b",
+        b"--b\r\nA:\t x \t\r\n\r\n\r\n--b--",
+        vec![PartStart, h("A", "x"), HeadersEnd, PartEnd, Finished],
+    );
+    ok(
+        b"b",
+        b"--b\r\nA: x  y\r\n\r\n\r\n--b--",
+        vec![PartStart, h("A", "x  y"), HeadersEnd, PartEnd, Finished],
+    );
+    ok(
+        b"b",
+        b"--b\r\nA: a:b:c\r\n\r\n\r\n--b--",
+        vec![PartStart, h("A", "a:b:c"), HeadersEnd, PartEnd, Finished],
+    );
     ok(
         b"b",
         b"--b\r\nX-Name: \xc3\xa4\xf0\x9f\x98\x80\r\n\r\n\r\n--b--",
-        vec![PartStart, Header(b"X-Name".to_vec(), b"\xc3\xa4\xf0\x9f\x98\x80".to_vec()), HeadersEnd, PartEnd, Finished],
+        vec![
+            PartStart,
+            Header(b"X-Name".to_vec(), b"\xc3\xa4\xf0\x9f\x98\x80".to_vec()),
+            HeadersEnd,
+            PartEnd,
+            Finished,
+        ],
     );
-    ok(b"b", b"--b\r\n!#$%&'*+-.^_`|~09Az: v\r\n\r\n\r\n--b--", vec![PartStart, h("!#$%&'*+-.^_`|~09Az", "v"), HeadersEnd, PartEnd, Finished]);
+    ok(
+        b"b",
+        b"--b\r\n!#$%&'*+-.^_`|~09Az: v\r\n\r\n\r\n--b--",
+        vec![
+            PartStart,
+            h("!#$%&'*+-.^_`|~09Az", "v"),
+            HeadersEnd,
+            PartEnd,
+            Finished,
+        ],
+    );
 }
 
 #[test]
@@ -303,9 +566,29 @@ fn duplicate_headers_and_missing_content_disposition() {
     ok(
         b"b",
         b"--b\r\nA: 1\r\nA: 2\r\na: 3\r\n\r\nx\r\n--b--",
-        vec![PartStart, h("A", "1"), h("A", "2"), h("a", "3"), HeadersEnd, d(b"x"), PartEnd, Finished],
+        vec![
+            PartStart,
+            h("A", "1"),
+            h("A", "2"),
+            h("a", "3"),
+            HeadersEnd,
+            d(b"x"),
+            PartEnd,
+            Finished,
+        ],
     );
-    ok(b"b", b"--b\r\nContent-Type: text/plain\r\n\r\nx\r\n--b--", vec![PartStart, h("Content-Type", "text/plain"), HeadersEnd, d(b"x"), PartEnd, Finished]);
+    ok(
+        b"b",
+        b"--b\r\nContent-Type: text/plain\r\n\r\nx\r\n--b--",
+        vec![
+            PartStart,
+            h("Content-Type", "text/plain"),
+            HeadersEnd,
+            d(b"x"),
+            PartEnd,
+            Finished,
+        ],
+    );
 }
 
 #[test]
@@ -313,41 +596,115 @@ fn empty_name_parameter_is_fine_for_the_parser() {
     ok(
         b"b",
         b"--b\r\nContent-Disposition: form-data; name=\"\"\r\n\r\n\r\n--b--",
-        vec![PartStart, h("Content-Disposition", "form-data; name=\"\""), HeadersEnd, PartEnd, Finished],
+        vec![
+            PartStart,
+            h("Content-Disposition", "form-data; name=\"\""),
+            HeadersEnd,
+            PartEnd,
+            Finished,
+        ],
     );
 }
 
 #[test]
 fn header_too_long() {
     // LINE = 16: "A: 1234567890X\r\n" is exactly 16 bytes (ok), one more byte is too long.
-    check::<16, 8>(b"b", b"--b\r\nA: 1234567890X\r\n\r\n\r\n--b--", vec![PartStart, h("A", "1234567890X"), HeadersEnd, PartEnd, Finished], None);
-    check::<16, 8>(b"b", b"--b\r\nA: 1234567890XY\r\n\r\n\r\n--b--", vec![PartStart], Some(OError::HeaderTooLong));
+    check::<16, 8>(
+        b"b",
+        b"--b\r\nA: 1234567890X\r\n\r\n\r\n--b--",
+        vec![
+            PartStart,
+            h("A", "1234567890X"),
+            HeadersEnd,
+            PartEnd,
+            Finished,
+        ],
+        None,
+    );
+    check::<16, 8>(
+        b"b",
+        b"--b\r\nA: 1234567890XY\r\n\r\n\r\n--b--",
+        vec![PartStart],
+        Some(OError::HeaderTooLong),
+    );
     // Detected before the line ends: 17 bytes without LF then EOF.
-    check::<16, 8>(b"b", b"--b\r\nA: 12345678901234", vec![PartStart], Some(OError::HeaderTooLong));
+    check::<16, 8>(
+        b"b",
+        b"--b\r\nA: 12345678901234",
+        vec![PartStart],
+        Some(OError::HeaderTooLong),
+    );
     // Exactly LINE bytes without LF then EOF: not too long, just EOF.
-    check::<16, 8>(b"b", b"--b\r\nA: 1234567890123", vec![PartStart], Some(OError::UnexpectedEof));
+    check::<16, 8>(
+        b"b",
+        b"--b\r\nA: 1234567890123",
+        vec![PartStart],
+        Some(OError::UnexpectedEof),
+    );
     // A huge header line.
     let mut body = b"--b\r\nA: ".to_vec();
     body.extend(std::iter::repeat(b'x').take(5000));
     body.extend_from_slice(b"\r\n\r\n\r\n--b--");
     check::<512, 8>(b"b", &body, vec![PartStart], Some(OError::HeaderTooLong));
     // Too-long line that also has a bare LF: HeaderTooLong wins (checked first).
-    check::<16, 8>(b"b", b"--b\r\nA: 1234567890XYZ\n\r\n\r\n--b--", vec![PartStart], Some(OError::HeaderTooLong));
+    check::<16, 8>(
+        b"b",
+        b"--b\r\nA: 1234567890XYZ\n\r\n\r\n--b--",
+        vec![PartStart],
+        Some(OError::HeaderTooLong),
+    );
     // Exactly LINE bytes ending in a bare LF: not too long, but malformed.
-    check::<16, 8>(b"b", b"--b\r\nA: 1234567890XY\n\r\n\r\n--b--", vec![PartStart], Some(OError::Header));
+    check::<16, 8>(
+        b"b",
+        b"--b\r\nA: 1234567890XY\n\r\n\r\n--b--",
+        vec![PartStart],
+        Some(OError::Header),
+    );
 }
 
 #[test]
 fn too_many_headers() {
-    check::<64, 2>(b"b", b"--b\r\nA: 1\r\nB: 2\r\n\r\n\r\n--b--", vec![PartStart, h("A", "1"), h("B", "2"), HeadersEnd, PartEnd, Finished], None);
-    check::<64, 2>(b"b", b"--b\r\nA: 1\r\nB: 2\r\nC: 3\r\n\r\n\r\n--b--", vec![PartStart, h("A", "1"), h("B", "2")], Some(OError::TooManyHeaders));
+    check::<64, 2>(
+        b"b",
+        b"--b\r\nA: 1\r\nB: 2\r\n\r\n\r\n--b--",
+        vec![
+            PartStart,
+            h("A", "1"),
+            h("B", "2"),
+            HeadersEnd,
+            PartEnd,
+            Finished,
+        ],
+        None,
+    );
+    check::<64, 2>(
+        b"b",
+        b"--b\r\nA: 1\r\nB: 2\r\nC: 3\r\n\r\n\r\n--b--",
+        vec![PartStart, h("A", "1"), h("B", "2")],
+        Some(OError::TooManyHeaders),
+    );
     // The third line is also malformed: TooManyHeaders is checked first.
-    check::<64, 2>(b"b", b"--b\r\nA: 1\r\nB: 2\r\nnocolon\r\n\r\n\r\n--b--", vec![PartStart, h("A", "1"), h("B", "2")], Some(OError::TooManyHeaders));
+    check::<64, 2>(
+        b"b",
+        b"--b\r\nA: 1\r\nB: 2\r\nnocolon\r\n\r\n\r\n--b--",
+        vec![PartStart, h("A", "1"), h("B", "2")],
+        Some(OError::TooManyHeaders),
+    );
     // The count resets per part.
     check::<64, 1>(
         b"b",
         b"--b\r\nA: 1\r\n\r\n\r\n--b\r\nB: 2\r\n\r\n\r\n--b--",
-        vec![PartStart, h("A", "1"), HeadersEnd, PartEnd, PartStart, h("B", "2"), HeadersEnd, PartEnd, Finished],
+        vec![
+            PartStart,
+            h("A", "1"),
+            HeadersEnd,
+            PartEnd,
+            PartStart,
+            h("B", "2"),
+            HeadersEnd,
+            PartEnd,
+            Finished,
+        ],
         None,
     );
 }
@@ -356,17 +713,35 @@ fn too_many_headers() {
 fn data_with_delimiter_lookalikes() {
     // "--b CRLF CRLF --b CRLF --b-- ...": the body's "--b" has no CRLF before it
     // and is data; "\r\n--b--" closes; the rest is epilogue.
-    ok(b"b", b"--b\r\n\r\n--b\r\n--b--\r\n--b\r\n--b--", vec![PartStart, HeadersEnd, d(b"--b"), PartEnd, Finished]);
+    ok(
+        b"b",
+        b"--b\r\n\r\n--b\r\n--b--\r\n--b\r\n--b--",
+        vec![PartStart, HeadersEnd, d(b"--b"), PartEnd, Finished],
+    );
     ok(
         b"b",
         b"--b\r\n\r\n--b\r\n--b\r\n\r\n--b--\r\n--b--",
-        vec![PartStart, HeadersEnd, d(b"--b"), PartEnd, PartStart, HeadersEnd, d(b"--b--"), PartEnd, Finished],
+        vec![
+            PartStart,
+            HeadersEnd,
+            d(b"--b"),
+            PartEnd,
+            PartStart,
+            HeadersEnd,
+            d(b"--b--"),
+            PartEnd,
+            Finished,
+        ],
     );
 }
 
 #[test]
 fn close_right_after_data_lookalike() {
-    ok(b"b", b"--b\r\n\r\n--b\r\n--b--", vec![PartStart, HeadersEnd, d(b"--b"), PartEnd, Finished]);
+    ok(
+        b"b",
+        b"--b\r\n\r\n--b\r\n--b--",
+        vec![PartStart, HeadersEnd, d(b"--b"), PartEnd, Finished],
+    );
 }
 
 #[test]
@@ -376,18 +751,36 @@ fn binary_data_all_bytes() {
     let mut body = b"--bnd\r\nContent-Type: application/octet-stream\r\n\r\n".to_vec();
     body.extend_from_slice(&data);
     body.extend_from_slice(b"\r\n--bnd--\r\n");
-    ok(b"bnd", &body, vec![PartStart, h("Content-Type", "application/octet-stream"), HeadersEnd, d(&data), PartEnd, Finished]);
+    ok(
+        b"bnd",
+        &body,
+        vec![
+            PartStart,
+            h("Content-Type", "application/octet-stream"),
+            HeadersEnd,
+            d(&data),
+            PartEnd,
+            Finished,
+        ],
+    );
 }
 
 #[test]
 fn long_boundary_70() {
-    let b: Vec<u8> = std::iter::repeat(b"abcdefghij".iter().copied()).flatten().take(70).collect();
+    let b: Vec<u8> = std::iter::repeat(b"abcdefghij".iter().copied())
+        .flatten()
+        .take(70)
+        .collect();
     let mut body = b"--".to_vec();
     body.extend_from_slice(&b);
     body.extend_from_slice(b"\r\n\r\nx\r\n--");
     body.extend_from_slice(&b);
     body.extend_from_slice(b"--");
-    ok(&b, &body, vec![PartStart, HeadersEnd, d(b"x"), PartEnd, Finished]);
+    ok(
+        &b,
+        &body,
+        vec![PartStart, HeadersEnd, d(b"x"), PartEnd, Finished],
+    );
 }
 
 // ---------------------------------------------------------- boundary / set-up
@@ -399,14 +792,20 @@ fn boundary_validation() {
     assert!(Parser::<64, 4>::new(b"'()+_,-./:=?09azAZ").is_ok());
     assert!(Parser::<64, 4>::new(&[b'x'; 70]).is_ok());
     assert_eq!(Parser::<64, 4>::new(b"").err(), Some(Error::Boundary));
-    assert_eq!(Parser::<64, 4>::new(&[b'x'; 71]).err(), Some(Error::Boundary));
+    assert_eq!(
+        Parser::<64, 4>::new(&[b'x'; 71]).err(),
+        Some(Error::Boundary)
+    );
     assert_eq!(Parser::<64, 4>::new(b"a ").err(), Some(Error::Boundary));
     assert_eq!(Parser::<64, 4>::new(b" ").err(), Some(Error::Boundary));
     assert_eq!(Parser::<64, 4>::new(b"a\"b").err(), Some(Error::Boundary));
     assert_eq!(Parser::<64, 4>::new(b"a;b").err(), Some(Error::Boundary));
     assert_eq!(Parser::<64, 4>::new(b"a\\b").err(), Some(Error::Boundary));
     assert_eq!(Parser::<64, 4>::new(b"a\r\nb").err(), Some(Error::Boundary));
-    assert_eq!(Parser::<64, 4>::new(b"\xc3\xa4").err(), Some(Error::Boundary));
+    assert_eq!(
+        Parser::<64, 4>::new(b"\xc3\xa4").err(),
+        Some(Error::Boundary)
+    );
     let (ev, err) = run_whole::<64, 4>(b"", b"----");
     assert_eq!((ev, err), (vec![], Some(OError::Boundary)));
 }
@@ -418,19 +817,52 @@ fn from_content_type() {
     }
     assert_eq!(b(b"multipart/form-data; boundary=abc"), Ok(b"abc".to_vec()));
     assert_eq!(b(b"multipart/form-data;boundary=abc"), Ok(b"abc".to_vec()));
-    assert_eq!(b(b"multipart/form-data ; boundary = abc "), Ok(b"abc".to_vec()));
-    assert_eq!(b(b"  multipart/form-data; boundary=abc"), Ok(b"abc".to_vec()));
+    assert_eq!(
+        b(b"multipart/form-data ; boundary = abc "),
+        Ok(b"abc".to_vec())
+    );
+    assert_eq!(
+        b(b"  multipart/form-data; boundary=abc"),
+        Ok(b"abc".to_vec())
+    );
     assert_eq!(b(b"MULTIPART/Form-Data; BOUNDARY=abc"), Ok(b"abc".to_vec()));
     assert_eq!(b(b"multipart/mixed; boundary=abc"), Ok(b"abc".to_vec()));
-    assert_eq!(b(b"multipart/form-data; boundary=\"abc\""), Ok(b"abc".to_vec()));
-    assert_eq!(b(b"multipart/form-data; boundary=\"a b/c:d\""), Ok(b"a b/c:d".to_vec()));
-    assert_eq!(b(b"multipart/form-data; charset=utf-8; boundary=abc"), Ok(b"abc".to_vec()));
-    assert_eq!(b(b"multipart/form-data; boundary=abc; charset=utf-8"), Ok(b"abc".to_vec()));
-    assert_eq!(b(b"multipart/form-data; x=\"a;b\"; boundary=abc"), Ok(b"abc".to_vec()));
-    assert_eq!(b(b"multipart/form-data; x=\"a\\\"b\"; boundary=abc"), Ok(b"abc".to_vec()));
-    assert_eq!(b(b"multipart/form-data; boundary=abc--"), Ok(b"abc--".to_vec()));
-    assert_eq!(b(b"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"), Ok(b"----WebKitFormBoundary7MA4YWxkTrZu0gW".to_vec()));
-    assert_eq!(b(b"multipart/form-data; boundary=\"x\"; boundary=\"y\""), Ok(b"x".to_vec())); // first wins
+    assert_eq!(
+        b(b"multipart/form-data; boundary=\"abc\""),
+        Ok(b"abc".to_vec())
+    );
+    assert_eq!(
+        b(b"multipart/form-data; boundary=\"a b/c:d\""),
+        Ok(b"a b/c:d".to_vec())
+    );
+    assert_eq!(
+        b(b"multipart/form-data; charset=utf-8; boundary=abc"),
+        Ok(b"abc".to_vec())
+    );
+    assert_eq!(
+        b(b"multipart/form-data; boundary=abc; charset=utf-8"),
+        Ok(b"abc".to_vec())
+    );
+    assert_eq!(
+        b(b"multipart/form-data; x=\"a;b\"; boundary=abc"),
+        Ok(b"abc".to_vec())
+    );
+    assert_eq!(
+        b(b"multipart/form-data; x=\"a\\\"b\"; boundary=abc"),
+        Ok(b"abc".to_vec())
+    );
+    assert_eq!(
+        b(b"multipart/form-data; boundary=abc--"),
+        Ok(b"abc--".to_vec())
+    );
+    assert_eq!(
+        b(b"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"),
+        Ok(b"----WebKitFormBoundary7MA4YWxkTrZu0gW".to_vec())
+    );
+    assert_eq!(
+        b(b"multipart/form-data; boundary=\"x\"; boundary=\"y\""),
+        Ok(b"x".to_vec())
+    ); // first wins
     assert_eq!(b(b"multipart/form-data; boundary=a;b"), Ok(b"a".to_vec())); // later parameters are not validated
 
     for bad in [
@@ -455,7 +887,12 @@ fn from_content_type() {
         b"multipart/form-data; charset=utf-8",
         b"",
     ] {
-        assert_eq!(b(bad), Err(Error::Boundary), "{:?}", String::from_utf8_lossy(bad));
+        assert_eq!(
+            b(bad),
+            Err(Error::Boundary),
+            "{:?}",
+            String::from_utf8_lossy(bad)
+        );
     }
 }
 
@@ -480,7 +917,10 @@ fn min_buffer_and_progress() {
     assert_eq!(tail.len(), p.min_buffer() - 1);
     assert_eq!(p.parse(tail, false), Ok((0, None)));
     // ... but with eof the held-back bytes are data.
-    assert_eq!(p.parse(tail, true), Ok((tail.len(), Some(Event::Data(tail)))));
+    assert_eq!(
+        p.parse(tail, true),
+        Ok((tail.len(), Some(Event::Data(tail))))
+    );
     assert_eq!(p.parse(b"", true), Err(Error::UnexpectedEof));
     // With exactly min_buffer bytes it is decided.
     let mut p = Parser::<64, 4>::new(b"abc").unwrap();
@@ -504,9 +944,18 @@ fn min_buffer_and_progress() {
 #[test]
 fn size_of_parser_is_documented() {
     use core::mem::size_of;
-    assert_eq!(size_of::<Parser<'static, 512, 16>>(), 512 + 5 * size_of::<usize>());
-    assert_eq!(size_of::<Parser<'static, 128, 4>>(), 128 + 5 * size_of::<usize>());
-    assert_eq!(size_of::<Parser<'static, 64, 1>>(), 64 + 5 * size_of::<usize>());
+    assert_eq!(
+        size_of::<Parser<'static, 512, 16>>(),
+        512 + 5 * size_of::<usize>()
+    );
+    assert_eq!(
+        size_of::<Parser<'static, 128, 4>>(),
+        128 + 5 * size_of::<usize>()
+    );
+    assert_eq!(
+        size_of::<Parser<'static, 64, 1>>(),
+        64 + 5 * size_of::<usize>()
+    );
 }
 
 #[test]
@@ -528,7 +977,14 @@ fn zero_copy_data_borrows_input() {
 #[test]
 fn error_display_and_traits() {
     use std::error::Error as _;
-    for e in [Error::Boundary, Error::HeaderTooLong, Error::TooManyHeaders, Error::Header, Error::UnexpectedEof, Error::Disposition] {
+    for e in [
+        Error::Boundary,
+        Error::HeaderTooLong,
+        Error::TooManyHeaders,
+        Error::Header,
+        Error::UnexpectedEof,
+        Error::Disposition,
+    ] {
         assert!(!format!("{e}").is_empty());
         assert!(!format!("{e:?}").is_empty());
         assert!(e.source().is_none());

@@ -32,7 +32,12 @@ enum FlashError {
 
 impl MockFlash {
     const fn new() -> Self {
-        MockFlash { page: [0xff; PAGE], fill: 0, next_page: 0, programmed: [[0xff; PAGE]; PAGES] }
+        MockFlash {
+            page: [0xff; PAGE],
+            fill: 0,
+            next_page: 0,
+            programmed: [[0xff; PAGE]; PAGES],
+        }
     }
 
     fn write(&mut self, mut data: &[u8]) -> Result<(), FlashError> {
@@ -54,7 +59,10 @@ impl MockFlash {
         if self.fill == 0 {
             return Ok(());
         }
-        let slot = self.programmed.get_mut(self.next_page).ok_or(FlashError::Full)?;
+        let slot = self
+            .programmed
+            .get_mut(self.next_page)
+            .ok_or(FlashError::Full)?;
         slot.copy_from_slice(&self.page);
         self.next_page += 1;
         self.page = [0xff; PAGE];
@@ -104,7 +112,9 @@ fn receive(flash: &mut MockFlash) -> Result<u32, ReadError<core::convert::Infall
                 flash.write(d).map_err(|_| ReadError::BufferTooSmall)?;
                 written += d.len() as u32;
             }
-            Event::PartEnd if in_firmware => flash.flush().map_err(|_| ReadError::BufferTooSmall)?,
+            Event::PartEnd if in_firmware => {
+                flash.flush().map_err(|_| ReadError::BufferTooSmall)?
+            }
             Event::Finished => return Ok(written),
             _ => {}
         }

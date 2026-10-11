@@ -1,6 +1,8 @@
 //! The streaming parser (DESIGN.md §2–7, §9–10).
 
-use crate::chars::{eq_ignore_case, is_ows, is_tchar, is_valid_boundary, ows_trimmed_range, trim_ows};
+use crate::chars::{
+    eq_ignore_case, is_ows, is_tchar, is_valid_boundary, ows_trimmed_range, trim_ows,
+};
 use crate::Error;
 
 /// Maximum number of SP/HTAB transport-padding bytes accepted between the boundary
@@ -170,7 +172,11 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
             Ev::PartEnd => Event::PartEnd,
             Ev::Finished => Event::Finished,
             Ev::Data { end } => Event::Data(input.get(..end).unwrap_or(input)),
-            Ev::Header { name_end, value_start, value_end } => Event::Header {
+            Ev::Header {
+                name_end,
+                value_start,
+                value_end,
+            } => Event::Header {
                 name: self.line.get(..name_end).unwrap_or(&[]),
                 value: self.line.get(value_start..value_end).unwrap_or(&[]),
             },
@@ -178,13 +184,26 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
     }
 
     /// §10 Preamble.
-    fn preamble(&mut self, input: &[u8], eof: bool, at_start: bool) -> Result<(usize, Option<Ev>), Error> {
+    fn preamble(
+        &mut self,
+        input: &[u8],
+        eof: bool,
+        at_start: bool,
+    ) -> Result<(usize, Option<Ev>), Error> {
         match scan(input, eof, at_start, self.boundary) {
-            Found::Delim { at, len, close: true } => {
+            Found::Delim {
+                at,
+                len,
+                close: true,
+            } => {
                 self.state = State::Finished;
                 Ok((at.saturating_add(len), Some(Ev::Finished)))
             }
-            Found::Delim { at, len, close: false } => {
+            Found::Delim {
+                at,
+                len,
+                close: false,
+            } => {
                 self.state = State::Headers;
                 self.line_len = 0;
                 self.header_count = 0;
@@ -273,7 +292,11 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
     fn body(&mut self, input: &[u8], eof: bool) -> Result<(usize, Option<Ev>), Error> {
         match scan(input, eof, false, self.boundary) {
             Found::Delim { at: 0, len, close } => {
-                self.state = if close { State::Finished } else { State::NewPart };
+                self.state = if close {
+                    State::Finished
+                } else {
+                    State::NewPart
+                };
                 Ok((len, Some(Ev::PartEnd)))
             }
             Found::Delim { at, .. } | Found::HeldBack { at } => {
@@ -301,9 +324,15 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ev {
     PartStart,
-    Header { name_end: usize, value_start: usize, value_end: usize },
+    Header {
+        name_end: usize,
+        value_start: usize,
+        value_end: usize,
+    },
     HeadersEnd,
-    Data { end: usize },
+    Data {
+        end: usize,
+    },
     PartEnd,
     Finished,
 }
@@ -343,13 +372,19 @@ fn classify(s: &[u8], lead: &[u8], boundary: &[u8]) -> Class {
             Some(_) => Class::No,
         },
         Some(_) => {
-            let pad = tail.iter().take(PAD_PROBE).take_while(|&&b| is_ows(b)).count();
+            let pad = tail
+                .iter()
+                .take(PAD_PROBE)
+                .take_while(|&&b| is_ows(b))
+                .count();
             if pad > MAX_PADDING {
                 return Class::No;
             }
             match (tail.get(pad), tail.get(pad.saturating_add(1))) {
                 (None, _) | (Some(b'\r'), None) => Class::Partial,
-                (Some(b'\r'), Some(b'\n')) => Class::Part(full.saturating_add(pad).saturating_add(2)),
+                (Some(b'\r'), Some(b'\n')) => {
+                    Class::Part(full.saturating_add(pad).saturating_add(2))
+                }
                 _ => Class::No,
             }
         }
@@ -380,14 +415,29 @@ fn scan(input: &[u8], eof: bool, allow_d0: bool, boundary: &[u8]) -> Found {
             (0, b"--")
         } else {
             try_d0 = false;
-            match input.get(c..).and_then(|r| r.iter().position(|&b| b == b'\r')) {
+            match input
+                .get(c..)
+                .and_then(|r| r.iter().position(|&b| b == b'\r'))
+            {
                 Some(off) => (c.saturating_add(off), b"\r\n--"),
                 None => return Found::Nothing,
             }
         };
         match classify(input.get(at..).unwrap_or(&[]), lead, boundary) {
-            Class::Part(len) => return Found::Delim { at, len, close: false },
-            Class::Close(len) => return Found::Delim { at, len, close: true },
+            Class::Part(len) => {
+                return Found::Delim {
+                    at,
+                    len,
+                    close: false,
+                }
+            }
+            Class::Close(len) => {
+                return Found::Delim {
+                    at,
+                    len,
+                    close: true,
+                }
+            }
             Class::Partial if !eof => return Found::HeldBack { at },
             Class::No | Class::Partial => c = at.saturating_add(1),
         }

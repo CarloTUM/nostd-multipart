@@ -58,16 +58,14 @@ mod kani;
 #[cfg(any(feature = "embedded-io", feature = "embedded-io-async"))]
 mod io;
 
-
 pub use disposition::{content_disposition, ContentDisposition, Decoded, ParamValue};
 pub use encoder::{boundary_from_random, Encoder, Part};
 pub use error::Error;
 pub use parser::{Event, Parser, MAX_PADDING};
 
-#[cfg(any(feature = "embedded-io", feature = "embedded-io-async"))]
-pub use io::ReadError;
 #[cfg(feature = "embedded-io-async")]
 pub use io::asynch::MultipartReaderAsync;
 #[cfg(feature = "embedded-io")]
 pub use io::blocking::MultipartReader;
-
+#[cfg(any(feature = "embedded-io", feature = "embedded-io-async"))]
+pub use io::ReadError;

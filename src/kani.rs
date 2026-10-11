@@ -50,7 +50,9 @@ fn parse_one_call() {
     let bbuf: [u8; 4] = kani::any();
     let ibuf: [u8; 16] = kani::any();
     let eof: bool = kani::any();
-    let Ok(mut p) = Parser::<8, 2>::new(any_boundary(&bbuf)) else { return };
+    let Ok(mut p) = Parser::<8, 2>::new(any_boundary(&bbuf)) else {
+        return;
+    };
     check_call(&mut p, any_slice(&ibuf), eof);
 }
 
@@ -59,7 +61,9 @@ fn parse_one_call() {
 fn parse_two_calls() {
     let bbuf: [u8; 4] = kani::any();
     let ibuf: [u8; 16] = kani::any();
-    let Ok(mut p) = Parser::<8, 2>::new(any_boundary(&bbuf)) else { return };
+    let Ok(mut p) = Parser::<8, 2>::new(any_boundary(&bbuf)) else {
+        return;
+    };
     let input = any_slice(&ibuf);
     let split: usize = kani::any();
     kani::assume(split <= input.len());
@@ -111,8 +115,14 @@ fn from_content_type_no_panic() {
 fn encoder_no_panic() {
     let bbuf: [u8; 4] = kani::any();
     let nbuf: [u8; 3] = kani::any();
-    let Ok(mut enc) = Encoder::new(any_boundary(&bbuf)) else { return };
-    let part = Part { name: any_slice(&nbuf), filename: None, content_type: None };
+    let Ok(mut enc) = Encoder::new(any_boundary(&bbuf)) else {
+        return;
+    };
+    let part = Part {
+        name: any_slice(&nbuf),
+        filename: None,
+        content_type: None,
+    };
     let mut out = [0u8; 8];
     let mut total = 0u64;
     let mut rounds = 0;

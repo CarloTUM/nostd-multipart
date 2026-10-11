@@ -5,7 +5,19 @@ pub(crate) const fn is_bchar(b: u8) -> bool {
     b.is_ascii_alphanumeric()
         || matches!(
             b,
-            b'\'' | b'(' | b')' | b'+' | b'_' | b',' | b'-' | b'.' | b'/' | b':' | b'=' | b'?' | b' '
+            b'\''
+                | b'('
+                | b')'
+                | b'+'
+                | b'_'
+                | b','
+                | b'-'
+                | b'.'
+                | b'/'
+                | b':'
+                | b'='
+                | b'?'
+                | b' '
         )
 }
 
@@ -38,10 +50,7 @@ pub(crate) const fn is_ows(b: u8) -> bool {
 
 /// Rule 1: 1–70 bchars, last byte not SP.
 pub(crate) fn is_valid_boundary(b: &[u8]) -> bool {
-    !b.is_empty()
-        && b.len() <= 70
-        && b.iter().all(|&c| is_bchar(c))
-        && b.last() != Some(&b' ')
+    !b.is_empty() && b.len() <= 70 && b.iter().all(|&c| is_bchar(c)) && b.last() != Some(&b' ')
 }
 
 /// `s` without leading and trailing SP/HTAB.

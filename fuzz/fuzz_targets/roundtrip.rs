@@ -25,7 +25,8 @@ struct Input<'a> {
 }
 
 fn lossy(v: &[u8]) -> bool {
-    v.windows(3).any(|w| matches!(w, b"%22" | b"%0D" | b"%0A" | b"%0d" | b"%0a"))
+    v.windows(3)
+        .any(|w| matches!(w, b"%22" | b"%0D" | b"%0A" | b"%0d" | b"%0a"))
 }
 
 fn make_safe(boundary: &[u8], data: &[u8]) -> Vec<u8> {
@@ -48,16 +49,27 @@ fn make_safe(boundary: &[u8], data: &[u8]) -> Vec<u8> {
 }
 
 fuzz_target!(|input: Input<'_>| {
-    let Ok(mut enc) = Encoder::new(input.boundary) else { return };
+    let Ok(mut enc) = Encoder::new(input.boundary) else {
+        return;
+    };
     if input.parts.len() > 8 {
         return;
     }
-    if input.parts.iter().any(|p| lossy(p.name) || p.filename.is_some_and(lossy)) {
+    if input
+        .parts
+        .iter()
+        .any(|p| lossy(p.name) || p.filename.is_some_and(lossy))
+    {
         return;
     }
-    // Keep every header line within the parser's LINE = 512 (escaping triples
-    // bytes at most): longer names are legitimately `HeaderTooLong`.
-    if input.parts.iter().any(|p| p.name.len() > 100 || p.filename.map_or(0, <[u8]>::len) > 100 || p.content_type.map_or(0, <[u8]>::len) > 100) {
+    // Keep every header line within the parser's LINE = 2048 (escaping triples
+    // bytes at most: 38 + 300 + 14 + 300 + 3 < 2048): longer names are
+    // legitimately `HeaderTooLong`.
+    if input.parts.iter().any(|p| {
+        p.name.len() > 100
+            || p.filename.map_or(0, <[u8]>::len) > 100
+            || p.content_type.map_or(0, <[u8]>::len) > 100
+    }) {
         return;
     }
     let out_len = (input.out_len as usize).max(1);
@@ -66,7 +78,11 @@ fuzz_target!(|input: Input<'_>| {
     let mut lens = Vec::new();
     let mut kept: Vec<(Part<'_>, Vec<u8>)> = Vec::new();
     for p in &input.parts {
-        let part = Part { name: p.name, filename: p.filename, content_type: p.content_type };
+        let part = Part {
+            name: p.name,
+            filename: p.filename,
+            content_type: p.content_type,
+        };
         let data = make_safe(input.boundary, p.data);
         loop {
             match enc.write_part_header(&part, &mut out) {
@@ -79,7 +95,11 @@ fuzz_target!(|input: Input<'_>| {
                 }
                 Err(e) => {
                     assert_eq!(e, nostd_multipart::Error::Header);
-                    assert!(p.content_type.unwrap().iter().any(|&b| b == b'\r' || b == b'\n'));
+                    assert!(p
+                        .content_type
+                        .unwrap()
+                        .iter()
+                        .any(|&b| b == b'\r' || b == b'\n'));
                     return;
                 }
             }
@@ -95,11 +115,18 @@ fuzz_target!(|input: Input<'_>| {
             break;
         }
     }
-    assert_eq!(Encoder::new(input.boundary).unwrap().content_length(&lens), body.len() as u64);
+    assert_eq!(
+        Encoder::new(input.boundary).unwrap().content_length(&lens),
+        body.len() as u64
+    );
 
     // Parse back in chunks of `chunk` bytes (0 => whole body).
-    let chunk = if input.chunk == 0 { body.len().max(1) } else { input.chunk as usize };
-    let mut parser = Parser::<512, 16>::new(input.boundary).unwrap();
+    let chunk = if input.chunk == 0 {
+        body.len().max(1)
+    } else {
+        input.chunk as usize
+    };
+    let mut parser = Parser::<2048, 16>::new(input.boundary).unwrap();
     let mut got: Vec<(Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>, Vec<u8>)> = Vec::new();
     let mut buf = Vec::new();
     let mut pos = 0;

@@ -63,7 +63,10 @@ fn classify(s: &[u8], lead: &[u8], boundary: &[u8]) -> Class {
     if tail.starts_with(b"--") {
         return Class::Close(pattern.len() + 2);
     }
-    let pad = tail.iter().take_while(|&&b| b == b' ' || b == b'\t').count();
+    let pad = tail
+        .iter()
+        .take_while(|&&b| b == b' ' || b == b'\t')
+        .count();
     if pad > MAX_PADDING {
         return Class::No;
     }
@@ -74,7 +77,12 @@ fn classify(s: &[u8], lead: &[u8], boundary: &[u8]) -> Class {
 }
 
 /// Finds the first resolved delimiter at or after `from`. Returns `(at, len, is_close)`.
-fn find_delimiter(body: &[u8], from: usize, boundary: &[u8], allow_d0: bool) -> Option<(usize, usize, bool)> {
+fn find_delimiter(
+    body: &[u8],
+    from: usize,
+    boundary: &[u8],
+    allow_d0: bool,
+) -> Option<(usize, usize, bool)> {
     if allow_d0 && from == 0 {
         match classify(body, b"--", boundary) {
             Class::Part(n) => return Some((0, n, false)),
@@ -98,7 +106,12 @@ fn find_delimiter(body: &[u8], from: usize, boundary: &[u8], allow_d0: bool) -> 
 
 /// Parses `body` completely. Returns the events produced before the end or the
 /// error, exactly as the streaming parser must (DESIGN.md §10).
-pub fn parse(boundary: &[u8], body: &[u8], line_max: usize, max_headers: usize) -> (Vec<OEvent>, Option<OError>) {
+pub fn parse(
+    boundary: &[u8],
+    body: &[u8],
+    line_max: usize,
+    max_headers: usize,
+) -> (Vec<OEvent>, Option<OError>) {
     let mut ev = Vec::new();
     if !valid_boundary(boundary) {
         return (ev, Some(OError::Boundary));
@@ -119,7 +132,11 @@ pub fn parse(boundary: &[u8], body: &[u8], line_max: usize, max_headers: usize) 
         loop {
             let Some(lf) = body[pos..].iter().position(|&b| b == b'\n') else {
                 // No line end: the parser accumulates everything that is left.
-                let e = if body.len() - pos > line_max { OError::HeaderTooLong } else { OError::UnexpectedEof };
+                let e = if body.len() - pos > line_max {
+                    OError::HeaderTooLong
+                } else {
+                    OError::UnexpectedEof
+                };
                 return (ev, Some(e));
             };
             let line = &body[pos..pos + lf + 1];

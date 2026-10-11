@@ -50,7 +50,8 @@ fn token_alphabet() -> Vec<Vec<u8>> {
 
 fn gen_body() -> impl Strategy<Value = Vec<u8>> {
     let alpha = token_alphabet();
-    prop::collection::vec(0..alpha.len(), 0..40).prop_map(move |idx| idx.iter().flat_map(|&i| alpha[i].clone()).collect())
+    prop::collection::vec(0..alpha.len(), 0..40)
+        .prop_map(move |idx| idx.iter().flat_map(|&i| alpha[i].clone()).collect())
 }
 
 proptest! {
@@ -86,16 +87,35 @@ fn gen_part() -> impl Strategy<Value = GenPart> {
     (
         "[A-Za-z0-9 _.%-]{0,16}",
         prop::option::of("[A-Za-z0-9 _.%-]{1,16}(\\.[a-z]{1,4})?"),
-        prop::option::of(prop_oneof![Just("text/plain".to_string()), Just("application/octet-stream".to_string()), Just("image/png".to_string())]),
+        prop::option::of(prop_oneof![
+            Just("text/plain".to_string()),
+            Just("application/octet-stream".to_string()),
+            Just("image/png".to_string())
+        ]),
         prop::collection::vec((token(), "[A-Za-z0-9 ,;=/.-]{0,20}"), 0..3),
         prop::collection::vec(any::<u8>(), 0..200),
     )
-        .prop_map(|(name, filename, content_type, extra, data)| GenPart { name, filename, content_type, extra, data })
+        .prop_map(|(name, filename, content_type, extra, data)| GenPart {
+            name,
+            filename,
+            content_type,
+            extra,
+            data,
+        })
         .prop_filter("extra header names unique and not content-*", |p| {
             // multer stores headers in a HeaderMap via insert(), dropping duplicates.
-            let names: Vec<String> = p.extra.iter().map(|(n, _)| n.to_ascii_lowercase()).collect();
-            names.iter().all(|n| n != "content-disposition" && n != "content-type")
-                && names.iter().enumerate().all(|(i, n)| !names[..i].contains(n))
+            let names: Vec<String> = p
+                .extra
+                .iter()
+                .map(|(n, _)| n.to_ascii_lowercase())
+                .collect();
+            names
+                .iter()
+                .all(|n| n != "content-disposition" && n != "content-type")
+                && names
+                    .iter()
+                    .enumerate()
+                    .all(|(i, n)| !names[..i].contains(n))
         })
 }
 
@@ -152,12 +172,14 @@ fn parse_ours(boundary: &[u8], body: &[u8], chunks: &[usize]) -> Vec<SeenPart> {
         let mut done = false;
         let had_event = ev.is_some();
         match ev {
-            Some(Event::PartStart) => parts.push(SeenPart { headers: vec![], data: vec![] }),
-            Some(Event::Header { name, value }) => parts
-                .last_mut()
-                .unwrap()
-                .headers
-                .push((String::from_utf8(name.to_ascii_lowercase()).unwrap(), value.to_vec())),
+            Some(Event::PartStart) => parts.push(SeenPart {
+                headers: vec![],
+                data: vec![],
+            }),
+            Some(Event::Header { name, value }) => parts.last_mut().unwrap().headers.push((
+                String::from_utf8(name.to_ascii_lowercase()).unwrap(),
+                value.to_vec(),
+            )),
             Some(Event::Data(d)) => parts.last_mut().unwrap().data.extend_from_slice(d),
             Some(Event::Finished) => done = true,
             Some(Event::HeadersEnd | Event::PartEnd) | None => {}

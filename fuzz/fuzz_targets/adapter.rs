@@ -37,10 +37,19 @@ impl embedded_io::Read for R<'_> {
     }
 }
 
-fn run<const BUF: usize>(boundary: &[u8], input: &Input<'_>) -> Result<(Vec<OEvent>, Option<OError>), ()> {
+fn run<const BUF: usize>(
+    boundary: &[u8],
+    input: &Input<'_>,
+) -> Result<(Vec<OEvent>, Option<OError>), ()> {
     let parser = Parser::<32, 3>::new(boundary).unwrap();
     let min = parser.min_buffer();
-    let mut r = MultipartReader::<_, BUF, 32, 3>::new(R { data: input.body, reads: input.reads.clone().into_iter() }, parser);
+    let mut r = MultipartReader::<_, BUF, 32, 3>::new(
+        R {
+            data: input.body,
+            reads: input.reads.clone().into_iter(),
+        },
+        parser,
+    );
     let mut events = Vec::new();
     let mut pending: Vec<u8> = Vec::new();
     let flush = |pending: &mut Vec<u8>, events: &mut Vec<OEvent>| {
@@ -55,7 +64,9 @@ fn run<const BUF: usize>(boundary: &[u8], input: &Input<'_>) -> Result<(Vec<OEve
                 flush(&mut pending, &mut events);
                 match ev {
                     Event::PartStart => events.push(OEvent::PartStart),
-                    Event::Header { name, value } => events.push(OEvent::Header(name.to_vec(), value.to_vec())),
+                    Event::Header { name, value } => {
+                        events.push(OEvent::Header(name.to_vec(), value.to_vec()))
+                    }
                     Event::HeadersEnd => events.push(OEvent::HeadersEnd),
                     Event::PartEnd => events.push(OEvent::PartEnd),
                     Event::Finished => {
@@ -66,7 +77,10 @@ fn run<const BUF: usize>(boundary: &[u8], input: &Input<'_>) -> Result<(Vec<OEve
                 }
             }
             Err(ReadError::BufferTooSmall) => {
-                assert!(BUF < min, "BufferTooSmall with BUF {BUF} >= min_buffer {min}");
+                assert!(
+                    BUF < min,
+                    "BufferTooSmall with BUF {BUF} >= min_buffer {min}"
+                );
                 return Err(());
             }
             Err(ReadError::Parse(e)) => {

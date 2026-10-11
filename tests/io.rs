@@ -79,7 +79,10 @@ fn record(seen: &mut Seen, ev: Event<'_, '_>) -> bool {
 
 fn expected() -> Seen {
     Seen {
-        headers: vec![(b"Content-Disposition".to_vec(), b"form-data; name=\"f\"".to_vec())],
+        headers: vec![(
+            b"Content-Disposition".to_vec(),
+            b"form-data; name=\"f\"".to_vec(),
+        )],
         data: vec![b"hello\r\nworld".to_vec(), vec![]],
         starts: 2,
         ends: 2,
@@ -91,9 +94,19 @@ mod blocking {
     use super::*;
     use nostd_multipart::MultipartReader;
 
-    fn run<const BUF: usize>(max: usize, reads_left: Option<usize>) -> Result<Seen, ReadError<Boom>> {
+    fn run<const BUF: usize>(
+        max: usize,
+        reads_left: Option<usize>,
+    ) -> Result<Seen, ReadError<Boom>> {
         let parser = Parser::<64, 4>::new(b"b").unwrap();
-        let mut r = MultipartReader::<_, BUF, 64, 4>::new(Chunky { data: BODY, max, reads_left }, parser);
+        let mut r = MultipartReader::<_, BUF, 64, 4>::new(
+            Chunky {
+                data: BODY,
+                max,
+                reads_left,
+            },
+            parser,
+        );
         let mut seen = Seen::default();
         loop {
             let ev = r.next_event()?;
@@ -130,7 +143,14 @@ mod blocking {
         let _ = r;
         let body = b"--b\r\n\r\nx\r\n--b        \r\n\r\n\r\n--b--"; // 8 pads: delimiter needs 15 bytes of lookahead
         let parser = Parser::<64, 4>::new(b"b").unwrap();
-        let mut r = MultipartReader::<_, 14, 64, 4>::new(Chunky { data: body, max: 100, reads_left: None }, parser);
+        let mut r = MultipartReader::<_, 14, 64, 4>::new(
+            Chunky {
+                data: body,
+                max: 100,
+                reads_left: None,
+            },
+            parser,
+        );
         let mut err = None;
         for _ in 0..20 {
             match r.next_event() {
@@ -149,13 +169,27 @@ mod blocking {
     fn io_error_and_parse_error_propagate() {
         assert_eq!(run::<64>(5, Some(3)).err(), Some(ReadError::Io(Boom)));
         let parser = Parser::<64, 4>::new(b"b").unwrap();
-        let mut r = MultipartReader::<_, 64, 64, 4>::new(Chunky { data: b"--b\r\nbad\r\n", max: 3, reads_left: None }, parser);
+        let mut r = MultipartReader::<_, 64, 64, 4>::new(
+            Chunky {
+                data: b"--b\r\nbad\r\n",
+                max: 3,
+                reads_left: None,
+            },
+            parser,
+        );
         assert_eq!(r.next_event(), Ok(Event::PartStart));
         assert_eq!(r.next_event(), Err(ReadError::Parse(Error::Header)));
         assert_eq!(r.next_event(), Err(ReadError::Parse(Error::Header)));
         // Truncated body: EOF from the reader.
         let parser = Parser::<64, 4>::new(b"b").unwrap();
-        let mut r = MultipartReader::<_, 64, 64, 4>::new(Chunky { data: b"--b\r\n\r\nxyz", max: 4, reads_left: None }, parser);
+        let mut r = MultipartReader::<_, 64, 64, 4>::new(
+            Chunky {
+                data: b"--b\r\n\r\nxyz",
+                max: 4,
+                reads_left: None,
+            },
+            parser,
+        );
         assert_eq!(r.next_event(), Ok(Event::PartStart));
         assert_eq!(r.next_event(), Ok(Event::HeadersEnd));
         let mut data = Vec::new();
@@ -177,7 +211,10 @@ mod blocking {
         assert!(format!("{}", ReadError::<Boom>::Parse(Error::Header)).contains("multipart error"));
         assert!(format!("{}", ReadError::<Boom>::BufferTooSmall).contains("min_buffer"));
         assert!(e.source().is_none());
-        assert_eq!(ReadError::<Boom>::from(Error::Boundary), ReadError::Parse(Error::Boundary));
+        assert_eq!(
+            ReadError::<Boom>::from(Error::Boundary),
+            ReadError::Parse(Error::Boundary)
+        );
         let _c = e;
     }
 }
@@ -209,9 +246,19 @@ mod asynch {
         }
     }
 
-    async fn run<const BUF: usize>(max: usize, reads_left: Option<usize>) -> Result<Seen, ReadError<Boom>> {
+    async fn run<const BUF: usize>(
+        max: usize,
+        reads_left: Option<usize>,
+    ) -> Result<Seen, ReadError<Boom>> {
         let parser = Parser::<64, 4>::new(b"b").unwrap();
-        let mut r = MultipartReaderAsync::<_, BUF, 64, 4>::new(AsyncChunky(Chunky { data: BODY, max, reads_left }), parser);
+        let mut r = MultipartReaderAsync::<_, BUF, 64, 4>::new(
+            AsyncChunky(Chunky {
+                data: BODY,
+                max,
+                reads_left,
+            }),
+            parser,
+        );
         let mut seen = Seen::default();
         loop {
             let ev = r.next_event().await?;
@@ -230,7 +277,11 @@ mod asynch {
         futures::executor::block_on(async {
             for max in 1..=BODY.len() {
                 assert_eq!(run::<16>(max, None).await.unwrap(), expected(), "max {max}");
-                assert_eq!(run::<256>(max, None).await.unwrap(), expected(), "max {max}");
+                assert_eq!(
+                    run::<256>(max, None).await.unwrap(),
+                    expected(),
+                    "max {max}"
+                );
             }
             assert_eq!(run::<64>(5, Some(2)).await.err(), Some(ReadError::Io(Boom)));
         });
@@ -240,12 +291,26 @@ mod asynch {
     fn errors() {
         futures::executor::block_on(async {
             let parser = Parser::<64, 4>::new(b"b").unwrap();
-            let mut r = MultipartReaderAsync::<_, 64, 64, 4>::new(AsyncChunky(Chunky { data: b"--b\r\nbad\r\n", max: 3, reads_left: None }), parser);
+            let mut r = MultipartReaderAsync::<_, 64, 64, 4>::new(
+                AsyncChunky(Chunky {
+                    data: b"--b\r\nbad\r\n",
+                    max: 3,
+                    reads_left: None,
+                }),
+                parser,
+            );
             assert_eq!(r.next_event().await, Ok(Event::PartStart));
             assert_eq!(r.next_event().await, Err(ReadError::Parse(Error::Header)));
             let body = b"--b\r\n\r\nx\r\n--b        \r\n\r\n\r\n--b--";
             let parser = Parser::<64, 4>::new(b"b").unwrap();
-            let mut r = MultipartReaderAsync::<_, 14, 64, 4>::new(AsyncChunky(Chunky { data: body, max: 100, reads_left: None }), parser);
+            let mut r = MultipartReaderAsync::<_, 14, 64, 4>::new(
+                AsyncChunky(Chunky {
+                    data: body,
+                    max: 100,
+                    reads_left: None,
+                }),
+                parser,
+            );
             let mut err = None;
             for _ in 0..20 {
                 match r.next_event().await {

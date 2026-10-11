@@ -35,7 +35,10 @@ fn dispositions(events: &[OEvent]) -> Vec<(Vec<u8>, Option<Vec<u8>>)> {
             Header(n, v) if n.eq_ignore_ascii_case(b"content-disposition") => {
                 let cd = content_disposition(v).unwrap();
                 assert!(cd.is_form_data());
-                Some((cd.name().unwrap().bytes().collect(), cd.filename().map(|f| f.bytes().collect())))
+                Some((
+                    cd.name().unwrap().bytes().collect(),
+                    cd.filename().map(|f| f.bytes().collect()),
+                ))
             }
             _ => None,
         })
@@ -46,7 +49,8 @@ fn check(name: &str, expected: Vec<OEvent>) {
     let (ct, body) = fixture(name);
     let p = Parser::<512, 16>::from_content_type(&ct).unwrap();
     let boundary = p.boundary().to_vec();
-    let got = check_against_oracle::<512, 16>(&boundary, &body, &standard_chunkings(body.len(), 64, 7));
+    let got =
+        check_against_oracle::<512, 16>(&boundary, &body, &standard_chunkings(body.len(), 64, 7));
     assert_eq!(got, (expected, None), "fixture {name}");
     // 1 KiB-ish buffer with realistic reads of 1..=37 bytes, driven through
     // from_content_type on the raw header value.
@@ -62,15 +66,36 @@ fn decoded_dispositions() {
         let p = Parser::<512, 16>::from_content_type(&ct).unwrap();
         dispositions(&run_whole::<512, 16>(p.boundary(), &body).0)
     };
-    assert_eq!(got("curl"), vec![(n("field"), None), (n("firmware"), Some(n("upload.bin"))), (n("odd"), Some(n("fïle \"q\".bin")))]);
-    assert_eq!(got("curl_edge"), vec![(n("empty"), None), (n("multi"), None), (n("ünïcode"), None)]);
+    assert_eq!(
+        got("curl"),
+        vec![
+            (n("field"), None),
+            (n("firmware"), Some(n("upload.bin"))),
+            (n("odd"), Some(n("fïle \"q\".bin")))
+        ]
+    );
+    assert_eq!(
+        got("curl_edge"),
+        vec![(n("empty"), None), (n("multi"), None), (n("ünïcode"), None)]
+    );
     assert_eq!(
         got("requests"),
-        vec![(n("field"), None), (n("empty"), None), (n("firmware"), Some(n("upload.bin"))), (n("notes"), Some(n("nötes \"q\".txt")))]
+        vec![
+            (n("field"), None),
+            (n("empty"), None),
+            (n("firmware"), Some(n("upload.bin"))),
+            (n("notes"), Some(n("nötes \"q\".txt")))
+        ]
     );
     assert_eq!(
         got("node"),
-        vec![(n("field"), None), (n("empty"), None), (n("firmware"), Some(n("upload.bin"))), (n("notes"), Some(n("nötes \"q\".txt"))), (n("multi"), None)]
+        vec![
+            (n("field"), None),
+            (n("empty"), None),
+            (n("firmware"), Some(n("upload.bin"))),
+            (n("notes"), Some(n("nötes \"q\".txt"))),
+            (n("multi"), None)
+        ]
     );
     assert_eq!(got("node_fields"), vec![(n("a"), None), (n("b"), None)]);
 }
@@ -88,13 +113,19 @@ fn curl() {
             d(b"plain text"),
             PartEnd,
             PartStart,
-            h("Content-Disposition", "form-data; name=\"firmware\"; filename=\"upload.bin\""),
+            h(
+                "Content-Disposition",
+                "form-data; name=\"firmware\"; filename=\"upload.bin\"",
+            ),
             h("Content-Type", "application/octet-stream"),
             HeadersEnd,
             d(BIN),
             PartEnd,
             PartStart,
-            h("Content-Disposition", "form-data; name=\"odd\"; filename=\"f\u{ef}le %22q%22.bin\""),
+            h(
+                "Content-Disposition",
+                "form-data; name=\"odd\"; filename=\"f\u{ef}le %22q%22.bin\"",
+            ),
             h("Content-Type", "application/octet-stream"),
             HeadersEnd,
             d(BIN),
@@ -119,7 +150,10 @@ fn curl_edge() {
             d(b"a\r\nb"),
             PartEnd,
             PartStart,
-            h("Content-Disposition", "form-data; name=\"\u{fc}n\u{ef}code\""),
+            h(
+                "Content-Disposition",
+                "form-data; name=\"\u{fc}n\u{ef}code\"",
+            ),
             HeadersEnd,
             d("ü".as_bytes()),
             PartEnd,
@@ -143,13 +177,19 @@ fn python_requests() {
             HeadersEnd,
             PartEnd,
             PartStart,
-            h("Content-Disposition", "form-data; name=\"firmware\"; filename=\"upload.bin\""),
+            h(
+                "Content-Disposition",
+                "form-data; name=\"firmware\"; filename=\"upload.bin\"",
+            ),
             h("Content-Type", "application/octet-stream"),
             HeadersEnd,
             d(BIN),
             PartEnd,
             PartStart,
-            h("Content-Disposition", "form-data; name=\"notes\"; filename=\"n\u{f6}tes %22q%22.txt\""),
+            h(
+                "Content-Disposition",
+                "form-data; name=\"notes\"; filename=\"n\u{f6}tes %22q%22.txt\"",
+            ),
             h("Content-Type", "text/plain"),
             HeadersEnd,
             d(TXT),
@@ -174,13 +214,19 @@ fn node_formdata() {
             HeadersEnd,
             PartEnd,
             PartStart,
-            h("Content-Disposition", "form-data; name=\"firmware\"; filename=\"upload.bin\""),
+            h(
+                "Content-Disposition",
+                "form-data; name=\"firmware\"; filename=\"upload.bin\"",
+            ),
             h("Content-Type", "application/octet-stream"),
             HeadersEnd,
             d(BIN),
             PartEnd,
             PartStart,
-            h("Content-Disposition", "form-data; name=\"notes\"; filename=\"n\u{f6}tes %22q%22.txt\""),
+            h(
+                "Content-Disposition",
+                "form-data; name=\"notes\"; filename=\"n\u{f6}tes %22q%22.txt\"",
+            ),
             h("Content-Type", "text/plain"),
             HeadersEnd,
             d(TXT),

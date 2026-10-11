@@ -58,9 +58,18 @@ struct Core<'b, const BUF: usize, const LINE: usize, const MAX_HEADERS: usize> {
     pending: Option<(usize, Ev)>,
 }
 
-impl<'b, const BUF: usize, const LINE: usize, const MAX_HEADERS: usize> Core<'b, BUF, LINE, MAX_HEADERS> {
+impl<'b, const BUF: usize, const LINE: usize, const MAX_HEADERS: usize>
+    Core<'b, BUF, LINE, MAX_HEADERS>
+{
     fn new(parser: Parser<'b, LINE, MAX_HEADERS>) -> Self {
-        Core { parser, buf: [0; BUF], start: 0, end: 0, eof: false, pending: None }
+        Core {
+            parser,
+            buf: [0; BUF],
+            start: 0,
+            end: 0,
+            eof: false,
+            pending: None,
+        }
     }
 
     fn advance(&mut self) -> Result<Advance, Error> {
@@ -81,7 +90,8 @@ impl<'b, const BUF: usize, const LINE: usize, const MAX_HEADERS: usize> Core<'b,
     /// The event recorded by the last `Ready`.
     fn event(&self) -> Event<'_, '_> {
         let (at, ev) = self.pending.unwrap_or((0, Ev::Finished));
-        self.parser.materialize(self.buf.get(at..self.end).unwrap_or(&[]), ev)
+        self.parser
+            .materialize(self.buf.get(at..self.end).unwrap_or(&[]), ev)
     }
 
     /// Compacts the buffer and returns the free space to read into.
@@ -93,7 +103,10 @@ impl<'b, const BUF: usize, const LINE: usize, const MAX_HEADERS: usize> Core<'b,
         }
         // A full buffer without progress means BUF < min_buffer(). (With `eof`
         // the parser always progresses, so `NeedRead` never happens then.)
-        self.buf.get_mut(self.end..).filter(|s| !s.is_empty()).ok_or(ReadError::BufferTooSmall)
+        self.buf
+            .get_mut(self.end..)
+            .filter(|s| !s.is_empty())
+            .ok_or(ReadError::BufferTooSmall)
     }
 
     fn filled(&mut self, n: usize) {
@@ -112,17 +125,31 @@ pub mod blocking {
 
     /// Drives a [`Parser`] from a blocking [`embedded_io::Read`] with a `BUF`-byte
     /// buffer (`BUF >= parser.min_buffer()`).
-    pub struct MultipartReader<'b, R, const BUF: usize, const LINE: usize = 512, const MAX_HEADERS: usize = 16> {
+    pub struct MultipartReader<
+        'b,
+        R,
+        const BUF: usize,
+        const LINE: usize = 512,
+        const MAX_HEADERS: usize = 16,
+    > {
         reader: R,
         core: Core<'b, BUF, LINE, MAX_HEADERS>,
     }
 
-    impl<'b, R: embedded_io::Read, const BUF: usize, const LINE: usize, const MAX_HEADERS: usize>
-        MultipartReader<'b, R, BUF, LINE, MAX_HEADERS>
+    impl<
+            'b,
+            R: embedded_io::Read,
+            const BUF: usize,
+            const LINE: usize,
+            const MAX_HEADERS: usize,
+        > MultipartReader<'b, R, BUF, LINE, MAX_HEADERS>
     {
         /// Wraps `reader`.
         pub fn new(reader: R, parser: Parser<'b, LINE, MAX_HEADERS>) -> Self {
-            MultipartReader { reader, core: Core::new(parser) }
+            MultipartReader {
+                reader,
+                core: Core::new(parser),
+            }
         }
 
         /// Returns the next event, reading as needed. After `Finished` it keeps
@@ -166,17 +193,31 @@ pub mod asynch {
 
     /// Drives a [`Parser`] from an [`embedded_io_async::Read`] with a `BUF`-byte
     /// buffer (`BUF >= parser.min_buffer()`).
-    pub struct MultipartReaderAsync<'b, R, const BUF: usize, const LINE: usize = 512, const MAX_HEADERS: usize = 16> {
+    pub struct MultipartReaderAsync<
+        'b,
+        R,
+        const BUF: usize,
+        const LINE: usize = 512,
+        const MAX_HEADERS: usize = 16,
+    > {
         reader: R,
         core: Core<'b, BUF, LINE, MAX_HEADERS>,
     }
 
-    impl<'b, R: embedded_io_async::Read, const BUF: usize, const LINE: usize, const MAX_HEADERS: usize>
-        MultipartReaderAsync<'b, R, BUF, LINE, MAX_HEADERS>
+    impl<
+            'b,
+            R: embedded_io_async::Read,
+            const BUF: usize,
+            const LINE: usize,
+            const MAX_HEADERS: usize,
+        > MultipartReaderAsync<'b, R, BUF, LINE, MAX_HEADERS>
     {
         /// Wraps `reader`.
         pub fn new(reader: R, parser: Parser<'b, LINE, MAX_HEADERS>) -> Self {
-            MultipartReaderAsync { reader, core: Core::new(parser) }
+            MultipartReaderAsync {
+                reader,
+                core: Core::new(parser),
+            }
         }
 
         /// Returns the next event, reading as needed. After `Finished` it keeps

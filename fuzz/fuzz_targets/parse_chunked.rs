@@ -42,5 +42,8 @@ fuzz_target!(|input: Input<'_>| {
     let chunked = common::run_chunked::<32, 3>(input.boundary, input.body, &chunks);
     assert_eq!(chunked, expected);
     let ones = vec![1usize; input.body.len()];
-    assert_eq!(common::run_chunked::<32, 3>(input.boundary, input.body, &ones), expected);
+    assert_eq!(
+        common::run_chunked::<32, 3>(input.boundary, input.body, &ones),
+        expected
+    );
 });

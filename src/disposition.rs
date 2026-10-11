@@ -177,7 +177,10 @@ pub fn content_disposition(value: &[u8]) -> Result<ContentDisposition<'_>, Error
         if s.is_empty() {
             break;
         }
-        let eq = s.iter().position(|&b| b == b'=').ok_or(Error::Disposition)?;
+        let eq = s
+            .iter()
+            .position(|&b| b == b'=')
+            .ok_or(Error::Disposition)?;
         let (attr, after_eq) = s.split_at_checked(eq).ok_or(Error::Disposition)?;
         let attr = trim_ows(attr);
         if !is_token(attr) {

@@ -33,7 +33,10 @@ fn browser_style() {
 
 #[test]
 fn whatwg_percent_escapes() {
-    let cd = content_disposition(b"form-data; name=\"q%22uote%0D%0Anl%0d%0a\"; filename=\"100%25 %2 %\"").unwrap();
+    let cd = content_disposition(
+        b"form-data; name=\"q%22uote%0D%0Anl%0d%0a\"; filename=\"100%25 %2 %\"",
+    )
+    .unwrap();
     assert_eq!(dec(cd.name().unwrap()), b"q\"uote\r\nnl\r\n");
     // Other % sequences are untouched.
     assert_eq!(dec(cd.filename().unwrap()), b"100%25 %2 %");
@@ -45,7 +48,10 @@ fn quoted_pairs() {
     let cd = content_disposition(b"form-data; name=\"a\\\"b\\\\c\\x\"").unwrap();
     assert_eq!(dec(cd.name().unwrap()), b"a\"b\\cx");
     // Inside quotes a trailing backslash escapes the quote => unterminated.
-    assert_eq!(content_disposition(b"form-data; name=\"a\\\"").err(), Some(Error::Disposition));
+    assert_eq!(
+        content_disposition(b"form-data; name=\"a\\\"").err(),
+        Some(Error::Disposition)
+    );
     // In an (lenient) unquoted value a lone trailing backslash is literal.
     let cd = content_disposition(b"form-data; name=a\\").unwrap();
     assert_eq!(dec(cd.name().unwrap()), b"a\\");
@@ -82,8 +88,12 @@ fn case_whitespace_and_order() {
 
 #[test]
 fn filename_star_is_raw() {
-    let cd = content_disposition(b"form-data; name=\"f\"; filename*=utf-8''%E2%82%AC%20rates.txt").unwrap();
-    assert_eq!(cd.filename_star(), Some(&b"utf-8''%E2%82%AC%20rates.txt"[..]));
+    let cd = content_disposition(b"form-data; name=\"f\"; filename*=utf-8''%E2%82%AC%20rates.txt")
+        .unwrap();
+    assert_eq!(
+        cd.filename_star(),
+        Some(&b"utf-8''%E2%82%AC%20rates.txt"[..])
+    );
     assert_eq!(cd.filename(), None);
     let cd = content_disposition(b"form-data; filename*=\"x\"; filename*=y").unwrap();
     assert_eq!(cd.filename_star(), Some(&b"x"[..]));
@@ -91,7 +101,10 @@ fn filename_star_is_raw() {
 
 #[test]
 fn utf8_values() {
-    let cd = content_disposition("form-data; name=\"ünïcode\"; filename=\"nötes %22q%22.txt\"".as_bytes()).unwrap();
+    let cd = content_disposition(
+        "form-data; name=\"ünïcode\"; filename=\"nötes %22q%22.txt\"".as_bytes(),
+    )
+    .unwrap();
     assert_eq!(dec(cd.name().unwrap()), "ünïcode".as_bytes());
     assert_eq!(dec(cd.filename().unwrap()), "nötes \"q\".txt".as_bytes());
 }
@@ -113,7 +126,12 @@ fn errors() {
         b"form-data; name=\"a\";;",
         b"form-data;;",
     ] {
-        assert_eq!(content_disposition(bad).err(), Some(Error::Disposition), "{:?}", String::from_utf8_lossy(bad));
+        assert_eq!(
+            content_disposition(bad).err(),
+            Some(Error::Disposition),
+            "{:?}",
+            String::from_utf8_lossy(bad)
+        );
     }
 }
 
@@ -123,9 +141,19 @@ fn decode_into_too_small() {
     let mut small = [0u8; 3];
     assert_eq!(cd.name().unwrap().decode_into(&mut small), None);
     let mut exact = [0u8; 6];
-    assert_eq!(cd.name().unwrap().decode_into(&mut exact), Some(&b"abcdef"[..]));
+    assert_eq!(
+        cd.name().unwrap().decode_into(&mut exact),
+        Some(&b"abcdef"[..])
+    );
     let mut zero = [0u8; 0];
-    assert_eq!(content_disposition(b"form-data; name=\"\"").unwrap().name().unwrap().decode_into(&mut zero), Some(&b""[..]));
+    assert_eq!(
+        content_disposition(b"form-data; name=\"\"")
+            .unwrap()
+            .name()
+            .unwrap()
+            .decode_into(&mut zero),
+        Some(&b""[..])
+    );
     let d = cd.name().unwrap().bytes();
     assert!(format!("{d:?}").contains("Decoded"));
     let _ = d.clone();

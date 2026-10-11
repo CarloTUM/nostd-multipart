@@ -4,7 +4,9 @@
 
 mod common;
 use common::*;
-use nostd_multipart::{boundary_from_random, content_disposition, Encoder, Error, Event, Parser, Part};
+use nostd_multipart::{
+    boundary_from_random, content_disposition, Encoder, Error, Event, Parser, Part,
+};
 use proptest::prelude::*;
 
 /// Encodes a whole body using `out` as the (possibly tiny) staging buffer.
@@ -36,16 +38,38 @@ fn encode(boundary: &[u8], parts: &[(Part<'_>, &[u8])], out_len: usize) -> Vec<u
 #[test]
 fn exact_output() {
     let parts = [
-        (Part { name: b"field", filename: None, content_type: None }, &b"plain text"[..]),
         (
-            Part { name: b"firmware", filename: Some(b"fw.bin"), content_type: Some(b"application/octet-stream") },
+            Part {
+                name: b"field",
+                filename: None,
+                content_type: None,
+            },
+            &b"plain text"[..],
+        ),
+        (
+            Part {
+                name: b"firmware",
+                filename: Some(b"fw.bin"),
+                content_type: Some(b"application/octet-stream"),
+            },
             &b"\x00\x01\xff"[..],
         ),
-        (Part { name: b"q\"\r\n\\", filename: Some(b"\"a\"\r\n.txt"), content_type: None }, &b""[..]),
+        (
+            Part {
+                name: b"q\"\r\n\\",
+                filename: Some(b"\"a\"\r\n.txt"),
+                content_type: None,
+            },
+            &b""[..],
+        ),
     ];
     let expected = b"--xyz\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nplain text\r\n--xyz\r\nContent-Disposition: form-data; name=\"firmware\"; filename=\"fw.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n\x00\x01\xff\r\n--xyz\r\nContent-Disposition: form-data; name=\"q%22%0D%0A\\\\\"; filename=\"%22a%22%0D%0A.txt\"\r\n\r\n\r\n--xyz--\r\n";
     for out_len in [1usize, 2, 3, 7, 64, 4096] {
-        assert_eq!(encode(b"xyz", &parts, out_len), &expected[..], "out_len {out_len}");
+        assert_eq!(
+            encode(b"xyz", &parts, out_len),
+            &expected[..],
+            "out_len {out_len}"
+        );
     }
     let enc = Encoder::new(b"xyz").unwrap();
     let lens: Vec<(Part<'_>, u64)> = parts.iter().map(|(p, d)| (*p, d.len() as u64)).collect();
@@ -67,11 +91,31 @@ fn zero_parts() {
 fn zero_length_buffer_makes_no_progress_but_no_error() {
     let mut enc = Encoder::new(b"b").unwrap();
     let mut out = [0u8; 0];
-    assert_eq!(enc.write_part_header(&Part { name: b"n", ..Part::default() }, &mut out), Ok((0, false)));
+    assert_eq!(
+        enc.write_part_header(
+            &Part {
+                name: b"n",
+                ..Part::default()
+            },
+            &mut out
+        ),
+        Ok((0, false))
+    );
     let mut out = [0u8; 100];
-    let (n, done) = enc.write_part_header(&Part { name: b"n", ..Part::default() }, &mut out).unwrap();
+    let (n, done) = enc
+        .write_part_header(
+            &Part {
+                name: b"n",
+                ..Part::default()
+            },
+            &mut out,
+        )
+        .unwrap();
     assert!(done);
-    assert_eq!(&out[..n], b"--b\r\nContent-Disposition: form-data; name=\"n\"\r\n\r\n");
+    assert_eq!(
+        &out[..n],
+        b"--b\r\nContent-Disposition: form-data; name=\"n\"\r\n\r\n"
+    );
 }
 
 #[test]
@@ -81,12 +125,39 @@ fn errors() {
     let mut enc = Encoder::new(b"b").unwrap();
     let mut out = [0u8; 100];
     assert_eq!(
-        enc.write_part_header(&Part { name: b"n", filename: None, content_type: Some(b"text/plain\r\nX: y") }, &mut out),
+        enc.write_part_header(
+            &Part {
+                name: b"n",
+                filename: None,
+                content_type: Some(b"text/plain\r\nX: y")
+            },
+            &mut out
+        ),
         Err(Error::Header)
     );
-    assert_eq!(enc.write_part_header(&Part { name: b"n", filename: None, content_type: Some(b"a\nb") }, &mut out), Err(Error::Header));
+    assert_eq!(
+        enc.write_part_header(
+            &Part {
+                name: b"n",
+                filename: None,
+                content_type: Some(b"a\nb")
+            },
+            &mut out
+        ),
+        Err(Error::Header)
+    );
     // The encoder is still usable afterwards.
-    assert!(enc.write_part_header(&Part { name: b"n", ..Part::default() }, &mut out).unwrap().1);
+    assert!(
+        enc.write_part_header(
+            &Part {
+                name: b"n",
+                ..Part::default()
+            },
+            &mut out
+        )
+        .unwrap()
+        .1
+    );
 }
 
 #[test]
@@ -94,14 +165,19 @@ fn boundary_from_random_maps_to_bchars() {
     let r: [u8; 32] = core::array::from_fn(|i| (i as u8).wrapping_mul(37).wrapping_add(11));
     let b = boundary_from_random(&r).unwrap();
     assert!(Parser::<64, 4>::new(&b).is_ok());
-    assert!(b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_'));
+    assert!(b
+        .iter()
+        .all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_'));
     let all: Vec<u8> = (0u8..=255).collect();
     let all: [u8; 70] = all[..70].try_into().unwrap();
     assert!(Parser::<64, 4>::new(&boundary_from_random(&all).unwrap()).is_ok());
     let hi: [u8; 70] = core::array::from_fn(|i| 255 - i as u8);
     assert!(Parser::<64, 4>::new(&boundary_from_random(&hi).unwrap()).is_ok());
     assert_eq!(boundary_from_random(&[0u8; 0]).err(), Some(Error::Boundary));
-    assert_eq!(boundary_from_random(&[0u8; 71]).err(), Some(Error::Boundary));
+    assert_eq!(
+        boundary_from_random(&[0u8; 71]).err(),
+        Some(Error::Boundary)
+    );
     assert_eq!(boundary_from_random(&[0u8; 1]).unwrap(), *b"A");
     assert_eq!(boundary_from_random(&[63u8; 2]).unwrap(), *b"__");
     assert_eq!(boundary_from_random(&[62u8 + 64; 1]).unwrap(), *b"-");
@@ -111,9 +187,21 @@ fn boundary_from_random_maps_to_bchars() {
 fn whatwg_escaping_is_lossy_by_design() {
     // WHATWG does not escape '%', so a literal "%22" in a name decodes as '"'.
     // Browsers have the same ambiguity; documented in DESIGN.md rule 8.
-    let body = encode(b"b", &[(Part { name: b"100%22", ..Part::default() }, b"")], 64);
+    let body = encode(
+        b"b",
+        &[(
+            Part {
+                name: b"100%22",
+                ..Part::default()
+            },
+            b"",
+        )],
+        64,
+    );
     let (ev, _) = run_whole::<64, 4>(b"b", &body);
-    let OEvent::Header(_, v) = &ev[1] else { panic!() };
+    let OEvent::Header(_, v) = &ev[1] else {
+        panic!()
+    };
     assert_eq!(v, b"form-data; name=\"100%22\"");
     let cd = content_disposition(v).unwrap();
     assert_eq!(cd.name().unwrap().raw(), b"100%22");
@@ -170,17 +258,27 @@ fn data() -> impl Strategy<Value = Vec<u8>> {
         toks.push(d[..i].to_vec());
     }
     let n = toks.len();
-    prop::collection::vec(0..n, 0..16).prop_map(move |idx| idx.iter().flat_map(|&i| toks[i].clone()).collect())
+    prop::collection::vec(0..n, 0..16)
+        .prop_map(move |idx| idx.iter().flat_map(|&i| toks[i].clone()).collect())
 }
 
 fn rt_part() -> impl Strategy<Value = RtPart> {
     (
         text(),
         prop::option::of(text()),
-        prop::option::of(prop_oneof![Just(b"text/plain".to_vec()), Just(b"application/octet-stream".to_vec()), Just(b"x/y; q=\"a\"".to_vec())]),
+        prop::option::of(prop_oneof![
+            Just(b"text/plain".to_vec()),
+            Just(b"application/octet-stream".to_vec()),
+            Just(b"x/y; q=\"a\"".to_vec())
+        ]),
         data(),
     )
-        .prop_map(|(name, filename, content_type, data)| RtPart { name, filename, content_type, data: make_safe(&data) })
+        .prop_map(|(name, filename, content_type, data)| RtPart {
+            name,
+            filename,
+            content_type,
+            data: make_safe(&data),
+        })
 }
 
 /// RFC 2046 obligation on the caller: the data must not contain the delimiter
@@ -188,7 +286,13 @@ fn rt_part() -> impl Strategy<Value = RtPart> {
 /// CRLF would complete it). `D` followed by any other byte is allowed (rule 3).
 fn data_is_safe(data: &[u8]) -> bool {
     let d = [b"\r\n--", RT_BOUNDARY].concat();
-    data.windows(d.len()).enumerate().all(|(i, w)| w != d || !matches!(data.get(i + d.len()), None | Some(b'-' | b' ' | b'\t' | b'\r')))
+    data.windows(d.len()).enumerate().all(|(i, w)| {
+        w != d
+            || !matches!(
+                data.get(i + d.len()),
+                None | Some(b'-' | b' ' | b'\t' | b'\r')
+            )
+    })
 }
 
 /// Repairs generated data by inserting an `x` after every unsafe `D` occurrence,

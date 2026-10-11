@@ -42,11 +42,22 @@ impl UploadSource {
     fn new() -> Self {
         let mut enc = Encoder::new(BOUNDARY).unwrap();
         let mut header = vec![0u8; 256];
-        let part = Part { name: b"firmware", filename: Some(b"app.bin"), content_type: Some(b"application/octet-stream") };
+        let part = Part {
+            name: b"firmware",
+            filename: Some(b"app.bin"),
+            content_type: Some(b"application/octet-stream"),
+        };
         let (n, done) = enc.write_part_header(&part, &mut header).unwrap();
         assert!(done);
         header.truncate(n);
-        UploadSource { enc, stage: 0, header, header_pos: 0, gen: Gen(0x1234_5678), remaining: FILE_LEN }
+        UploadSource {
+            enc,
+            stage: 0,
+            header,
+            header_pos: 0,
+            gen: Gen(0x1234_5678),
+            remaining: FILE_LEN,
+        }
     }
 }
 
@@ -88,7 +99,11 @@ impl Read for UploadSource {
 fn main() {
     let mut source = UploadSource::new();
     let expected_len = Encoder::new(BOUNDARY).unwrap().content_length(&[(
-        Part { name: b"firmware", filename: Some(b"app.bin"), content_type: Some(b"application/octet-stream") },
+        Part {
+            name: b"firmware",
+            filename: Some(b"app.bin"),
+            content_type: Some(b"application/octet-stream"),
+        },
         FILE_LEN,
     )]);
 
@@ -111,12 +126,21 @@ fn main() {
         start += consumed;
         body_bytes += consumed as u64;
         match ev {
-            Some(Event::Header { name, value }) if name.eq_ignore_ascii_case(b"content-disposition") => {
+            Some(Event::Header { name, value })
+                if name.eq_ignore_ascii_case(b"content-disposition") =>
+            {
                 let cd = content_disposition(value).expect("bad Content-Disposition");
                 is_firmware = cd.name().is_some_and(|n| n == "firmware");
                 let mut fname = [0u8; 64];
-                let fname = cd.filename().and_then(|f| f.decode_into(&mut fname)).unwrap_or(b"");
-                println!("part name={:?} filename={:?}", cd.name().map(|n| n.raw()), std::str::from_utf8(fname));
+                let fname = cd
+                    .filename()
+                    .and_then(|f| f.decode_into(&mut fname))
+                    .unwrap_or(b"");
+                println!(
+                    "part name={:?} filename={:?}",
+                    cd.name().map(|n| n.raw()),
+                    std::str::from_utf8(fname)
+                );
             }
             Some(Event::Data(d)) if is_firmware => {
                 // "Write to flash": here, verify against the generator instead.
@@ -146,8 +170,14 @@ fn main() {
     println!("body bytes      : {body_bytes} (Content-Length {expected_len})");
     println!("parse calls     : {parse_calls}");
     println!("buffer          : {BUF} bytes");
-    println!("parser          : {} bytes (size_of)", core::mem::size_of::<Parser<'_, 256, 8>>());
-    println!("throughput      : {:.0} MiB/s", body_bytes as f64 / 1048576.0 / secs);
+    println!(
+        "parser          : {} bytes (size_of)",
+        core::mem::size_of::<Parser<'_, 256, 8>>()
+    );
+    println!(
+        "throughput      : {:.0} MiB/s",
+        body_bytes as f64 / 1048576.0 / secs
+    );
     assert_eq!(file_bytes, FILE_LEN);
     assert_eq!(body_bytes, expected_len);
 }
