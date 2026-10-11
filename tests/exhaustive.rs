@@ -8,7 +8,7 @@ use common::*;
 
 fn exhaustive<const LINE: usize, const MAX: usize>(boundary: &[u8], body: &[u8]) {
     assert!(body.len() <= 24);
-    check_against_oracle::<LINE, MAX>(boundary, body, &all_compositions(body.len()));
+    check_against_oracle::<LINE, MAX>(boundary, body, compositions(body.len()));
 }
 
 macro_rules! bodies {

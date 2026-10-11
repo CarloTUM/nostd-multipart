@@ -59,12 +59,12 @@ proptest! {
 
     #[test]
     fn chunking_invariance_random(body in gen_body(), seed in any::<u64>()) {
-        check_against_oracle::<32, 3>(B, &body, &standard_chunkings(body.len(), 6, seed));
+        check_against_oracle::<32, 3>(B, &body, standard_chunkings(body.len(), 6, seed));
     }
 
     #[test]
     fn chunking_invariance_random_bytes(body in prop::collection::vec(prop_oneof![Just(b'\r'), Just(b'\n'), Just(b'-'), Just(b'x'), Just(b'Y'), Just(b'9'), Just(b' '), Just(b':')], 0..64), seed in any::<u64>()) {
-        check_against_oracle::<32, 3>(B, &body, &standard_chunkings(body.len(), 6, seed));
+        check_against_oracle::<32, 3>(B, &body, standard_chunkings(body.len(), 6, seed));
     }
 }
 

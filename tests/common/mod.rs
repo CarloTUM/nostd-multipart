@@ -179,11 +179,11 @@ pub fn run_whole<const LINE: usize, const MAX_HEADERS: usize>(
 pub fn check_against_oracle<const LINE: usize, const MAX_HEADERS: usize>(
     boundary: &[u8],
     body: &[u8],
-    chunkings: &[Vec<usize>],
+    chunkings: impl IntoIterator<Item = Vec<usize>>,
 ) -> (Vec<OEvent>, Option<OError>) {
     let expected = oracle::parse(boundary, body, LINE, MAX_HEADERS);
     for ch in chunkings {
-        let got = run_chunked::<LINE, MAX_HEADERS>(boundary, body, ch);
+        let got = run_chunked::<LINE, MAX_HEADERS>(boundary, body, &ch);
         assert_eq!(
             got,
             expected,
@@ -194,27 +194,33 @@ pub fn check_against_oracle<const LINE: usize, const MAX_HEADERS: usize>(
     expected
 }
 
-/// All 2^(n-1) compositions of `n` (chunk-size lists); `[]` for n = 0.
-pub fn all_compositions(n: usize) -> Vec<Vec<usize>> {
-    if n == 0 {
-        return vec![vec![]];
-    }
-    let mut out = Vec::with_capacity(1 << (n - 1));
-    for mask in 0u64..(1u64 << (n - 1)) {
-        let mut v = Vec::new();
-        let mut run = 1;
-        for i in 0..n - 1 {
-            if mask & (1 << i) != 0 {
-                v.push(run);
-                run = 1;
-            } else {
-                run += 1;
-            }
+/// The composition of `n` selected by `mask` (bit i set = cut after byte i).
+fn composition(n: usize, mask: u64) -> Vec<usize> {
+    let mut v = Vec::new();
+    let mut run = 1;
+    for i in 0..n - 1 {
+        if mask & (1 << i) != 0 {
+            v.push(run);
+            run = 1;
+        } else {
+            run += 1;
         }
-        v.push(run);
-        out.push(v);
     }
-    out
+    v.push(run);
+    v
+}
+
+/// Lazily yields all 2^(n-1) compositions of `n` (chunk-size lists); `[]` for n = 0.
+pub fn compositions(n: usize) -> Box<dyn Iterator<Item = Vec<usize>>> {
+    if n == 0 {
+        return Box::new(std::iter::once(Vec::new()));
+    }
+    Box::new((0u64..(1u64 << (n - 1))).map(move |mask| composition(n, mask)))
+}
+
+/// All compositions of `n`, materialised (only for small `n`).
+pub fn all_compositions(n: usize) -> Vec<Vec<usize>> {
+    compositions(n).collect()
 }
 
 /// A useful standard set of chunkings for bodies of any size: whole, 1-byte,

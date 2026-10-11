@@ -50,7 +50,7 @@ fn check(name: &str, expected: Vec<OEvent>) {
     let p = Parser::<512, 16>::from_content_type(&ct).unwrap();
     let boundary = p.boundary().to_vec();
     let got =
-        check_against_oracle::<512, 16>(&boundary, &body, &standard_chunkings(body.len(), 64, 7));
+        check_against_oracle::<512, 16>(&boundary, &body, standard_chunkings(body.len(), 64, 7));
     assert_eq!(got, (expected, None), "fixture {name}");
     // 1 KiB-ish buffer with realistic reads of 1..=37 bytes, driven through
     // from_content_type on the raw header value.

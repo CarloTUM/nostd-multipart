@@ -16,11 +16,11 @@ fn d(x: &[u8]) -> OEvent {
     Data(x.to_vec())
 }
 
-fn chunkings_for(len: usize) -> Vec<Vec<usize>> {
+fn chunkings_for(len: usize) -> Box<dyn Iterator<Item = Vec<usize>>> {
     if len <= 24 {
-        all_compositions(len)
+        compositions(len)
     } else {
-        standard_chunkings(len, 40, len as u64)
+        Box::new(standard_chunkings(len, 40, len as u64).into_iter())
     }
 }
 
@@ -31,7 +31,7 @@ fn check<const LINE: usize, const MAX: usize>(
     events: Vec<OEvent>,
     err: Option<OError>,
 ) {
-    let got = check_against_oracle::<LINE, MAX>(boundary, body, &chunkings_for(body.len()));
+    let got = check_against_oracle::<LINE, MAX>(boundary, body, chunkings_for(body.len()));
     assert_eq!(
         got,
         (events, err),
