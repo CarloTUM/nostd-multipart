@@ -44,6 +44,9 @@ bodies! {
     ex_bare_lf_header: b"b" => b"--b\r\nA:1\n\r\n\r\n--b--";
     ex_obs_fold: b"b" => b"--b\r\nA:1\r\n b\r\n\r\n--b--";
     ex_no_colon: b"b" => b"--b\r\nAB\r\n\r\nx\r\n--b--";
+    ex_bad_name: b"b" => b"--b\r\nA B:1\r\n\r\n\r\n--b--";
+    ex_empty_name: b"b" => b"--b\r\n:1\r\n\r\n\r\n--b--";
+    ex_utf8_name: b"b" => b"--b\r\n\xc3\xa4:1\r\n\r\n\r\n--b--";
     ex_too_long: b"b" => b"--b\r\nA:12345678901234\r\n";
     ex_too_many: b"b" => b"--b\r\nA:1\r\nB:2\r\nC:3\r\n";
     ex_cr_in_value: b"b" => b"--b\r\nA:1\r2\r\n\r\n\r\n--b--";
