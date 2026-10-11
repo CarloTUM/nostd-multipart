@@ -6,7 +6,7 @@
 
 mod common;
 use common::*;
-use nostd_multipart::Parser;
+use nostd_multipart::{content_disposition, Parser};
 use OEvent::*;
 
 const BIN: &[u8] = b"hello\r\nworld\r\n--\r\n--not-a-boundary\r\n\x00\x01\xff binary";
@@ -27,6 +27,21 @@ fn fixture(name: &str) -> (Vec<u8>, Vec<u8>) {
     )
 }
 
+/// Decoded (name, filename) of every Content-Disposition header in the stream.
+fn dispositions(events: &[OEvent]) -> Vec<(Vec<u8>, Option<Vec<u8>>)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Header(n, v) if n.eq_ignore_ascii_case(b"content-disposition") => {
+                let cd = content_disposition(v).unwrap();
+                assert!(cd.is_form_data());
+                Some((cd.name().unwrap().bytes().collect(), cd.filename().map(|f| f.bytes().collect())))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn check(name: &str, expected: Vec<OEvent>) {
     let (ct, body) = fixture(name);
     let p = Parser::<512, 16>::from_content_type(&ct).unwrap();
@@ -37,6 +52,27 @@ fn check(name: &str, expected: Vec<OEvent>) {
     // from_content_type on the raw header value.
     let got2 = run_chunked::<512, 16>(&boundary, &body, &standard_chunkings(body.len(), 1, 99)[1]);
     assert_eq!(got2, got);
+}
+
+#[test]
+fn decoded_dispositions() {
+    let n = |s: &str| s.as_bytes().to_vec();
+    let got = |f: &str| {
+        let (ct, body) = fixture(f);
+        let p = Parser::<512, 16>::from_content_type(&ct).unwrap();
+        dispositions(&run_whole::<512, 16>(p.boundary(), &body).0)
+    };
+    assert_eq!(got("curl"), vec![(n("field"), None), (n("firmware"), Some(n("upload.bin"))), (n("odd"), Some(n("fïle \"q\".bin")))]);
+    assert_eq!(got("curl_edge"), vec![(n("empty"), None), (n("multi"), None), (n("ünïcode"), None)]);
+    assert_eq!(
+        got("requests"),
+        vec![(n("field"), None), (n("empty"), None), (n("firmware"), Some(n("upload.bin"))), (n("notes"), Some(n("nötes \"q\".txt")))]
+    );
+    assert_eq!(
+        got("node"),
+        vec![(n("field"), None), (n("empty"), None), (n("firmware"), Some(n("upload.bin"))), (n("notes"), Some(n("nötes \"q\".txt"))), (n("multi"), None)]
+    );
+    assert_eq!(got("node_fields"), vec![(n("a"), None), (n("b"), None)]);
 }
 
 #[test]

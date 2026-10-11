@@ -1,0 +1,48 @@
+[package]
+name = "nostd-multipart-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+nostd-multipart = { path = "..", features = ["embedded-io"] }
+embedded-io = "0.7"
+
+[[bin]]
+name = "parse_chunked"
+path = "fuzz_targets/parse_chunked.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "roundtrip"
+path = "fuzz_targets/roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "headers"
+path = "fuzz_targets/headers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "adapter"
+path = "fuzz_targets/adapter.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+
+[workspace]

@@ -132,6 +132,13 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
         input: &'i [u8],
         eof: bool,
     ) -> Result<(usize, Option<Event<'i, '_>>), Error> {
+        let (consumed, ev) = self.step(input, eof)?;
+        Ok((consumed, ev.map(|ev| self.materialize(input, ev))))
+    }
+
+    /// `parse` without the borrowed event: the event description `Ev` holds only
+    /// indices, which lets adapters store it and build the `Event` later.
+    pub(crate) fn step(&mut self, input: &[u8], eof: bool) -> Result<(usize, Option<Ev>), Error> {
         let step = match self.state {
             State::Preamble { at_start } => self.preamble(input, eof, at_start),
             State::Headers => self.headers(input, eof),
@@ -140,67 +147,70 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
                 self.state = State::Headers;
                 self.line_len = 0;
                 self.header_count = 0;
-                Ok((0, Out::PartStart))
+                Ok((0, Some(Ev::PartStart)))
             }
-            State::Finished => Ok((input.len(), Out::Finished)),
+            State::Finished => Ok((input.len(), Some(Ev::Finished))),
             State::Failed(e) => Err(e),
         };
-        let (consumed, out) = match step {
-            Ok(x) => x,
+        match step {
+            Ok(x) => Ok(x),
             Err(e) => {
                 self.state = State::Failed(e);
-                return Err(e);
+                Err(e)
             }
-        };
-        let event = match out {
-            Out::None => None,
-            Out::PartStart => Some(Event::PartStart),
-            Out::HeadersEnd => Some(Event::HeadersEnd),
-            Out::PartEnd => Some(Event::PartEnd),
-            Out::Finished => Some(Event::Finished),
-            Out::Data { end } => Some(Event::Data(input.get(..end).unwrap_or(input))),
-            Out::Header { name_end, value_start, value_end } => Some(Event::Header {
+        }
+    }
+
+    /// Turns an event description into the borrowed [`Event`]. `input` must be
+    /// the slice that was passed to the `step` that produced `ev`.
+    pub(crate) fn materialize<'i>(&self, input: &'i [u8], ev: Ev) -> Event<'i, '_> {
+        match ev {
+            Ev::PartStart => Event::PartStart,
+            Ev::HeadersEnd => Event::HeadersEnd,
+            Ev::PartEnd => Event::PartEnd,
+            Ev::Finished => Event::Finished,
+            Ev::Data { end } => Event::Data(input.get(..end).unwrap_or(input)),
+            Ev::Header { name_end, value_start, value_end } => Event::Header {
                 name: self.line.get(..name_end).unwrap_or(&[]),
                 value: self.line.get(value_start..value_end).unwrap_or(&[]),
-            }),
-        };
-        Ok((consumed, event))
+            },
+        }
     }
 
     /// §10 Preamble.
-    fn preamble(&mut self, input: &[u8], eof: bool, at_start: bool) -> Result<(usize, Out), Error> {
+    fn preamble(&mut self, input: &[u8], eof: bool, at_start: bool) -> Result<(usize, Option<Ev>), Error> {
         match scan(input, eof, at_start, self.boundary) {
             Found::Delim { at, len, close: true } => {
                 self.state = State::Finished;
-                Ok((at.saturating_add(len), Out::Finished))
+                Ok((at.saturating_add(len), Some(Ev::Finished)))
             }
             Found::Delim { at, len, close: false } => {
                 self.state = State::Headers;
                 self.line_len = 0;
                 self.header_count = 0;
-                Ok((at.saturating_add(len), Out::PartStart))
+                Ok((at.saturating_add(len), Some(Ev::PartStart)))
             }
             Found::HeldBack { at } => {
                 if at > 0 {
                     self.state = State::Preamble { at_start: false };
                 }
-                Ok((at, Out::None))
+                Ok((at, None))
             }
             Found::Nothing => {
                 if input.is_empty() {
                     if eof {
                         return Err(Error::UnexpectedEof);
                     }
-                    return Ok((0, Out::None));
+                    return Ok((0, None));
                 }
                 self.state = State::Preamble { at_start: false };
-                Ok((input.len(), Out::None))
+                Ok((input.len(), None))
             }
         }
     }
 
     /// §10 Headers.
-    fn headers(&mut self, input: &[u8], eof: bool) -> Result<(usize, Out), Error> {
+    fn headers(&mut self, input: &[u8], eof: bool) -> Result<(usize, Option<Ev>), Error> {
         let lf = input.iter().position(|&b| b == b'\n');
         let take = match lf {
             Some(i) => i.saturating_add(1),
@@ -211,7 +221,7 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
             if eof {
                 return Err(Error::UnexpectedEof);
             }
-            return Ok((0, Out::None));
+            return Ok((0, None));
         }
         let new_len = self.line_len.saturating_add(chunk.len());
         if new_len > LINE {
@@ -222,7 +232,7 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
         }
         self.line_len = new_len;
         if lf.is_none() {
-            return Ok((take, Out::None));
+            return Ok((take, None));
         }
         // A complete line is in `self.line[..new_len]`; it is consumed either way.
         self.line_len = 0;
@@ -232,7 +242,7 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
         };
         if content.is_empty() {
             self.state = State::Body; // 5.3
-            return Ok((take, Out::HeadersEnd));
+            return Ok((take, Some(Ev::HeadersEnd)));
         }
         self.header_count = self.header_count.saturating_add(1);
         if self.header_count > MAX_HEADERS {
@@ -251,26 +261,26 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
         let (start, end) = ows_trimmed_range(content.get(value_from..).unwrap_or(&[]));
         Ok((
             take,
-            Out::Header {
+            Some(Ev::Header {
                 name_end: colon,
                 value_start: value_from.saturating_add(start),
                 value_end: value_from.saturating_add(end),
-            },
+            }),
         ))
     }
 
     /// §10 Body.
-    fn body(&mut self, input: &[u8], eof: bool) -> Result<(usize, Out), Error> {
+    fn body(&mut self, input: &[u8], eof: bool) -> Result<(usize, Option<Ev>), Error> {
         match scan(input, eof, false, self.boundary) {
             Found::Delim { at: 0, len, close } => {
                 self.state = if close { State::Finished } else { State::NewPart };
-                Ok((len, Out::PartEnd))
+                Ok((len, Some(Ev::PartEnd)))
             }
             Found::Delim { at, .. } | Found::HeldBack { at } => {
                 if at == 0 {
-                    Ok((0, Out::None))
+                    Ok((0, None))
                 } else {
-                    Ok((at, Out::Data { end: at }))
+                    Ok((at, Some(Ev::Data { end: at })))
                 }
             }
             Found::Nothing => {
@@ -278,18 +288,18 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
                     if eof {
                         return Err(Error::UnexpectedEof);
                     }
-                    return Ok((0, Out::None));
+                    return Ok((0, None));
                 }
-                Ok((input.len(), Out::Data { end: input.len() }))
+                Ok((input.len(), Some(Ev::Data { end: input.len() })))
             }
         }
     }
 }
 
-/// Borrow-free description of a step's result; turned into an [`Event`] by `parse`.
+/// Borrow-free description of an event; turned into an [`Event`] by
+/// `Parser::materialize`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Out {
-    None,
+pub(crate) enum Ev {
     PartStart,
     Header { name_end: usize, value_start: usize, value_end: usize },
     HeadersEnd,

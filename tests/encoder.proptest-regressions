@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 109049570d785c4a92074668a932f31bfe80c98c2b358e4299491d47f939f097 # shrinks to parts = [RtPart { name: [], filename: Some([37, 50, 50]), content_type: None, data: [] }], out_len = 1, seed = 0
+cc 3ecd69c14d79066b864c760510214dd0219d51a73241ad9b15027ac72a7c443e # shrinks to parts = [RtPart { name: [92], filename: None, content_type: None, data: [] }], out_len = 1, seed = 0

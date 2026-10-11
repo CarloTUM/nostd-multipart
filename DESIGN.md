@@ -43,8 +43,9 @@ boundary    = 1*70 bchars, last byte is not SP
     backslash processing is done: bchars contain neither `\` nor `"`, so an escaped
     byte can never form a valid boundary and the result would be `Error::Boundary`
     anyway. The returned parser borrows the boundary bytes from `ct` (zero-copy).
-  * Anything else (no `multipart/`, syntax error, no `boundary` parameter, invalid
-    boundary) is `Error::Boundary`.
+  * Anything else (no `multipart/`, syntax error before or in the `boundary`
+    parameter, no `boundary` parameter, invalid boundary) is `Error::Boundary`.
+    Parameters after the `boundary` parameter are not validated.
 * `boundary_from_random(&[u8; N])` maps every random byte to one of 64 bchars
   (`A–Z a–z 0–9 - _`); `N` must be 1..=70, otherwise `Error::Boundary`.
 
@@ -168,7 +169,7 @@ disposition = token *( OWS ";" OWS token OWS "=" OWS ( token / quoted-string ) )
 * Parameters named `name` and `filename` (case-insensitive) are returned as
   `ParamValue`, the first occurrence wins. `ParamValue::raw()` is the undecoded
   slice between the quotes (or the token). `ParamValue::bytes()` iterates the
-  decoded bytes, `decode_into(&mut [u8])` writes them, `eq(&[u8])` compares them.
+  decoded bytes, `decode_into(&mut [u8])` writes them, `eq_bytes(&[u8])` compares them.
   Decoding: inside a quoted-string `\x` yields `x` (RFC 822 quoted-pair) and the
   three WHATWG percent escapes `%22`, `%0D`, `%0A` yield `"`, CR, LF. Every other
   `%` sequence is left untouched (a literal `%` is common in filenames). A token
@@ -179,8 +180,11 @@ disposition = token *( OWS ";" OWS token OWS "=" OWS ( token / quoted-string ) )
   charset or percent decoding; decoding needs allocation or a caller buffer and
   is out of scope. Browsers never send it for form uploads.
 * Other parameters are ignored. An unterminated quoted-string, a missing `=`, an
-  empty attribute, a non-token attribute, or an empty disposition type is
-  `Error::Disposition`. A trailing `;` is tolerated.
+  empty attribute, a non-token attribute, an empty or non-token disposition type,
+  or bytes other than `;` after a closing quote is `Error::Disposition`. A
+  trailing `;` is tolerated. *Leniency (documented deviation from the RFC 2183
+  `token` rule):* an unquoted value extends to the next `;` and may contain any
+  byte, because some non-browser clients send unquoted file names with spaces.
 
 ## 9. Streaming model and hold-back
 
@@ -286,8 +290,15 @@ CRLF "--" B "--" CRLF
 Content-Disposition: form-data; name="<esc(name)>"[; filename="<esc(filename)>"] CRLF
 [Content-Type: <content_type> CRLF]
 ```
-with `esc` replacing `"` => `%22`, CR => `%0D`, LF => `%0A` (WHATWG). `content_type`
-must not contain CR or LF (`Error::Header` otherwise).
+with `esc` replacing `"` => `%22`, CR => `%0D`, LF => `%0A` (WHATWG) **and**
+`\` => `\\`. `content_type` must not contain CR or LF (`Error::Header` otherwise).
+
+*Ambiguity resolved:* WHATWG's encoding algorithm does not escape `\`, but the
+value is an RFC 2183 quoted-string, whose decoder (rule 8, and e.g. Python's
+`cgi.parse_header`, Node's busboy) treats `\x` as a quoted-pair. A name ending in
+`\` would therefore be emitted as `name="a\"`, which is an unterminated string.
+The RFC-conforming option is to escape the backslash; browsers do not, which is
+part of WHATWG's documented lossiness and is accepted on the decoding side.
 
 * `write_part_header(&mut self, part, out) -> Result<(written, done), Error>`
   writes as many bytes of the part's prefix (leading CRLF for parts after the
