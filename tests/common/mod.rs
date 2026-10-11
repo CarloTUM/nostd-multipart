@@ -31,6 +31,13 @@ pub struct Collector {
 }
 
 impl Collector {
+    /// Flushes pending data (call before reading `events` after an error).
+    pub fn finish(&mut self) {
+        if !self.pending.is_empty() {
+            self.events.push(OEvent::Data(std::mem::take(&mut self.pending)));
+        }
+    }
+
     pub fn push(&mut self, ev: Event<'_, '_>) {
         match ev {
             Event::Data(d) => {
@@ -116,6 +123,7 @@ pub fn run_chunked<const LINE: usize, const MAX_HEADERS: usize>(
                 // Sticky error.
                 assert_eq!(parser.parse(&buf, eof), Err(e));
                 assert_eq!(parser.parse(b"", true), Err(e));
+                col.finish();
                 return (col.events, Some(oerr(e)));
             }
             Ok((consumed, had_event, finished)) => {

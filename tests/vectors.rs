@@ -187,14 +187,12 @@ fn first_delimiter_needs_crlf_unless_at_offset_zero() {
     ok(b"b", b"pre\r\n--b\r\n\r\nx\r\n--b--", vec![PartStart, HeadersEnd, d(b"x"), PartEnd, Finished]);
     // LF-only is not a line break: nothing is ever a delimiter.
     fails(b"b", b"--b\n\n--b--", vec![], OError::UnexpectedEof);
-    fails(b"b", b"\n--b\r\n\r\nx\r\n--b--", vec![], OError::UnexpectedEof);
-    // Hmm: "\n--b" is not at offset 0 and has no CRLF; the only CR candidates
-    // are "\r\n\r\nx" and "\r\n--b--" => zero parts? No: "\r\n--b--" IS a close
-    // delimiter, so the oracle and parser must agree on `Finished`:
 }
 
 #[test]
 fn lf_only_preamble_then_close() {
+    // "\n--b" is not at offset 0 and has no CRLF, so it is preamble; the only
+    // real delimiter is the close delimiter "\r\n--b--" => zero parts.
     ok(b"b", b"\n--b\r\n\r\nx\r\n--b--", vec![Finished]);
 }
 
@@ -205,7 +203,7 @@ fn close_without_trailing_crlf_at_eof() {
 
 #[test]
 fn padding_after_boundary() {
-    ok(b"b", b"--b \r\n\r\nx\r\n--b\t\r\n\r\n--b--", vec![PartStart, HeadersEnd, d(b"x"), PartEnd, PartStart, HeadersEnd, PartEnd, Finished]);
+    ok(b"b", b"--b \r\n\r\nx\r\n--b\t\r\n\r\n\r\n--b--", vec![PartStart, HeadersEnd, d(b"x"), PartEnd, PartStart, HeadersEnd, PartEnd, Finished]);
     ok(b"b", b"--b \t \t \t \t\r\n\r\n\r\n--b--", vec![PartStart, HeadersEnd, PartEnd, Finished]); // 8 bytes
     // 9 padding bytes: not a delimiter (rule 3), so the whole thing is preamble.
     fails(b"b", b"--b         \r\n\r\n\r\n--b", vec![], OError::UnexpectedEof);
@@ -279,7 +277,10 @@ fn header_errors() {
     fails(b"b", b"--b\r\nA: 1\r\r\n\r\n--b--", vec![PartStart], OError::Header); // CR before CRLF
     fails(b"b", b"--b\r\nA:\r\r\n\r\n--b--", vec![PartStart], OError::Header);
     fails(b"b", b"--b\r\n--b--\r\n\r\n--b--", vec![PartStart], OError::Header); // boundary line as header: no colon
-    fails(b"b", b"--b\r\n--b: x\r\n\r\n--b--", vec![PartStart, h("--b", "x")], OError::UnexpectedEof); // valid token!
+    // "--b" is a valid token, so this is a header; the final "--b--" has no CRLF
+    // before it and is data.
+    fails(b"b", b"--b\r\n--b: x\r\n\r\n--b--", vec![PartStart, h("--b", "x"), HeadersEnd, d(b"--b--")], OError::UnexpectedEof);
+    ok(b"b", b"--b\r\n--b: x\r\n\r\n\r\n--b--", vec![PartStart, h("--b", "x"), HeadersEnd, PartEnd, Finished]);
 }
 
 #[test]
@@ -318,9 +319,9 @@ fn empty_name_parameter_is_fine_for_the_parser() {
 
 #[test]
 fn header_too_long() {
-    // LINE = 16: "A: 1234567890\r\n" is 15 bytes (ok), one more byte is too long.
-    check::<16, 8>(b"b", b"--b\r\nA: 1234567890\r\n\r\n\r\n--b--", vec![PartStart, h("A", "1234567890"), HeadersEnd, PartEnd, Finished], None);
-    check::<16, 8>(b"b", b"--b\r\nA: 1234567890X\r\n\r\n\r\n--b--", vec![PartStart], Some(OError::HeaderTooLong));
+    // LINE = 16: "A: 1234567890X\r\n" is exactly 16 bytes (ok), one more byte is too long.
+    check::<16, 8>(b"b", b"--b\r\nA: 1234567890X\r\n\r\n\r\n--b--", vec![PartStart, h("A", "1234567890X"), HeadersEnd, PartEnd, Finished], None);
+    check::<16, 8>(b"b", b"--b\r\nA: 1234567890XY\r\n\r\n\r\n--b--", vec![PartStart], Some(OError::HeaderTooLong));
     // Detected before the line ends: 17 bytes without LF then EOF.
     check::<16, 8>(b"b", b"--b\r\nA: 12345678901234", vec![PartStart], Some(OError::HeaderTooLong));
     // Exactly LINE bytes without LF then EOF: not too long, just EOF.
@@ -331,7 +332,9 @@ fn header_too_long() {
     body.extend_from_slice(b"\r\n\r\n\r\n--b--");
     check::<512, 8>(b"b", &body, vec![PartStart], Some(OError::HeaderTooLong));
     // Too-long line that also has a bare LF: HeaderTooLong wins (checked first).
-    check::<16, 8>(b"b", b"--b\r\nA: 1234567890X\n\r\n\r\n--b--", vec![PartStart], Some(OError::HeaderTooLong));
+    check::<16, 8>(b"b", b"--b\r\nA: 1234567890XYZ\n\r\n\r\n--b--", vec![PartStart], Some(OError::HeaderTooLong));
+    // Exactly LINE bytes ending in a bare LF: not too long, but malformed.
+    check::<16, 8>(b"b", b"--b\r\nA: 1234567890XY\n\r\n\r\n--b--", vec![PartStart], Some(OError::Header));
 }
 
 #[test]
@@ -351,13 +354,14 @@ fn too_many_headers() {
 
 #[test]
 fn data_with_delimiter_lookalikes() {
+    // "--b CRLF CRLF --b CRLF --b-- ...": the body's "--b" has no CRLF before it
+    // and is data; "\r\n--b--" closes; the rest is epilogue.
+    ok(b"b", b"--b\r\n\r\n--b\r\n--b--\r\n--b\r\n--b--", vec![PartStart, HeadersEnd, d(b"--b"), PartEnd, Finished]);
     ok(
         b"b",
-        b"--b\r\n\r\n--b\r\n--b--\r\n--b\r\n--b--",
-        vec![PartStart, HeadersEnd, d(b"--b"), PartEnd, PartStart, HeadersEnd, PartEnd, PartStart, HeadersEnd, PartEnd, Finished],
+        b"--b\r\n\r\n--b\r\n--b\r\n\r\n--b--\r\n--b--",
+        vec![PartStart, HeadersEnd, d(b"--b"), PartEnd, PartStart, HeadersEnd, d(b"--b--"), PartEnd, Finished],
     );
-    // Wait: that body is "--b CRLF CRLF --b CRLF --b-- CRLF --b CRLF --b--":
-    // part1 headers end, data "--b" (no CRLF before it), then "\r\n--b--" closes.
 }
 
 #[test]
@@ -427,6 +431,7 @@ fn from_content_type() {
     assert_eq!(b(b"multipart/form-data; boundary=abc--"), Ok(b"abc--".to_vec()));
     assert_eq!(b(b"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"), Ok(b"----WebKitFormBoundary7MA4YWxkTrZu0gW".to_vec()));
     assert_eq!(b(b"multipart/form-data; boundary=\"x\"; boundary=\"y\""), Ok(b"x".to_vec())); // first wins
+    assert_eq!(b(b"multipart/form-data; boundary=a;b"), Ok(b"a".to_vec())); // later parameters are not validated
 
     for bad in [
         &b"text/plain; boundary=abc"[..],
@@ -439,7 +444,6 @@ fn from_content_type() {
         b"multipart/form-data; boundary=a/b",
         b"multipart/form-data; boundary=\"abc \"",
         b"multipart/form-data; boundary=\"\"",
-        b"multipart/form-data; boundary=a;b",
         b"multipart/form-data; =abc",
         b"multipart/form-data; a b=abc; boundary=abc",
         b"multipart; boundary=abc",
@@ -528,7 +532,7 @@ fn error_display_and_traits() {
         assert!(!format!("{e}").is_empty());
         assert!(!format!("{e:?}").is_empty());
         assert!(e.source().is_none());
-        let _ = e.clone();
+        let _copy: Error = e;
     }
     let p = Parser::<8, 1>::new(b"b").unwrap();
     let q = p.clone();

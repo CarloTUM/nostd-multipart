@@ -132,8 +132,255 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
         input: &'i [u8],
         eof: bool,
     ) -> Result<(usize, Option<Event<'i, '_>>), Error> {
-        let _ = (input, eof);
-        Err(Error::UnexpectedEof) // PHASE 2 STUB — replaced in phase 3
+        let step = match self.state {
+            State::Preamble { at_start } => self.preamble(input, eof, at_start),
+            State::Headers => self.headers(input, eof),
+            State::Body => self.body(input, eof),
+            State::NewPart => {
+                self.state = State::Headers;
+                self.line_len = 0;
+                self.header_count = 0;
+                Ok((0, Out::PartStart))
+            }
+            State::Finished => Ok((input.len(), Out::Finished)),
+            State::Failed(e) => Err(e),
+        };
+        let (consumed, out) = match step {
+            Ok(x) => x,
+            Err(e) => {
+                self.state = State::Failed(e);
+                return Err(e);
+            }
+        };
+        let event = match out {
+            Out::None => None,
+            Out::PartStart => Some(Event::PartStart),
+            Out::HeadersEnd => Some(Event::HeadersEnd),
+            Out::PartEnd => Some(Event::PartEnd),
+            Out::Finished => Some(Event::Finished),
+            Out::Data { end } => Some(Event::Data(input.get(..end).unwrap_or(input))),
+            Out::Header { name_end, value_start, value_end } => Some(Event::Header {
+                name: self.line.get(..name_end).unwrap_or(&[]),
+                value: self.line.get(value_start..value_end).unwrap_or(&[]),
+            }),
+        };
+        Ok((consumed, event))
+    }
+
+    /// §10 Preamble.
+    fn preamble(&mut self, input: &[u8], eof: bool, at_start: bool) -> Result<(usize, Out), Error> {
+        match scan(input, eof, at_start, self.boundary) {
+            Found::Delim { at, len, close: true } => {
+                self.state = State::Finished;
+                Ok((at.saturating_add(len), Out::Finished))
+            }
+            Found::Delim { at, len, close: false } => {
+                self.state = State::Headers;
+                self.line_len = 0;
+                self.header_count = 0;
+                Ok((at.saturating_add(len), Out::PartStart))
+            }
+            Found::HeldBack { at } => {
+                if at > 0 {
+                    self.state = State::Preamble { at_start: false };
+                }
+                Ok((at, Out::None))
+            }
+            Found::Nothing => {
+                if input.is_empty() {
+                    if eof {
+                        return Err(Error::UnexpectedEof);
+                    }
+                    return Ok((0, Out::None));
+                }
+                self.state = State::Preamble { at_start: false };
+                Ok((input.len(), Out::None))
+            }
+        }
+    }
+
+    /// §10 Headers.
+    fn headers(&mut self, input: &[u8], eof: bool) -> Result<(usize, Out), Error> {
+        let lf = input.iter().position(|&b| b == b'\n');
+        let take = match lf {
+            Some(i) => i.saturating_add(1),
+            None => input.len(),
+        };
+        let chunk = input.get(..take).unwrap_or(input);
+        if chunk.is_empty() {
+            if eof {
+                return Err(Error::UnexpectedEof);
+            }
+            return Ok((0, Out::None));
+        }
+        let new_len = self.line_len.saturating_add(chunk.len());
+        if new_len > LINE {
+            return Err(Error::HeaderTooLong); // 5.1
+        }
+        if let Some(dst) = self.line.get_mut(self.line_len..new_len) {
+            dst.copy_from_slice(chunk);
+        }
+        self.line_len = new_len;
+        if lf.is_none() {
+            return Ok((take, Out::None));
+        }
+        // A complete line is in `self.line[..new_len]`; it is consumed either way.
+        self.line_len = 0;
+        let line = self.line.get(..new_len).unwrap_or(&[]);
+        let Some(content) = line.strip_suffix(b"\r\n") else {
+            return Err(Error::Header); // 5.2 bare LF
+        };
+        if content.is_empty() {
+            self.state = State::Body; // 5.3
+            return Ok((take, Out::HeadersEnd));
+        }
+        self.header_count = self.header_count.saturating_add(1);
+        if self.header_count > MAX_HEADERS {
+            return Err(Error::TooManyHeaders); // 5.4
+        }
+        let Some(colon) = content.iter().position(|&b| b == b':') else {
+            return Err(Error::Header); // 5.5
+        };
+        if !is_token(content.get(..colon).unwrap_or(&[])) {
+            return Err(Error::Header); // 5.5
+        }
+        if content.contains(&b'\r') {
+            return Err(Error::Header); // 5.6
+        }
+        let value_from = colon.saturating_add(1);
+        let (start, end) = ows_trimmed_range(content.get(value_from..).unwrap_or(&[]));
+        Ok((
+            take,
+            Out::Header {
+                name_end: colon,
+                value_start: value_from.saturating_add(start),
+                value_end: value_from.saturating_add(end),
+            },
+        ))
+    }
+
+    /// §10 Body.
+    fn body(&mut self, input: &[u8], eof: bool) -> Result<(usize, Out), Error> {
+        match scan(input, eof, false, self.boundary) {
+            Found::Delim { at: 0, len, close } => {
+                self.state = if close { State::Finished } else { State::NewPart };
+                Ok((len, Out::PartEnd))
+            }
+            Found::Delim { at, .. } | Found::HeldBack { at } => {
+                if at == 0 {
+                    Ok((0, Out::None))
+                } else {
+                    Ok((at, Out::Data { end: at }))
+                }
+            }
+            Found::Nothing => {
+                if input.is_empty() {
+                    if eof {
+                        return Err(Error::UnexpectedEof);
+                    }
+                    return Ok((0, Out::None));
+                }
+                Ok((input.len(), Out::Data { end: input.len() }))
+            }
+        }
+    }
+}
+
+/// Borrow-free description of a step's result; turned into an [`Event`] by `parse`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Out {
+    None,
+    PartStart,
+    Header { name_end: usize, value_start: usize, value_end: usize },
+    HeadersEnd,
+    Data { end: usize },
+    PartEnd,
+    Finished,
+}
+
+/// Rule 3 classification of the bytes at a candidate position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    /// A part delimiter of this total length.
+    Part(usize),
+    /// A close delimiter of this total length.
+    Close(usize),
+    /// Definitely not a delimiter.
+    No,
+    /// Undecidable with the bytes available.
+    Partial,
+}
+
+/// Classifies `s` against `lead ++ boundary` followed by rule 3's suffix.
+fn classify(s: &[u8], lead: &[u8], boundary: &[u8]) -> Class {
+    let full = lead.len().saturating_add(boundary.len());
+    let mut matched = 0usize;
+    for (&have, &want) in s.iter().zip(lead.iter().chain(boundary)) {
+        if have != want {
+            return Class::No;
+        }
+        matched = matched.saturating_add(1);
+    }
+    if matched < full {
+        return Class::Partial;
+    }
+    let tail = s.get(full..).unwrap_or(&[]);
+    match tail.first() {
+        None => Class::Partial,
+        Some(b'-') => match tail.get(1) {
+            None => Class::Partial,
+            Some(b'-') => Class::Close(full.saturating_add(2)),
+            Some(_) => Class::No,
+        },
+        Some(_) => {
+            let pad = tail.iter().take(PAD_PROBE).take_while(|&&b| is_ows(b)).count();
+            if pad > MAX_PADDING {
+                return Class::No;
+            }
+            match (tail.get(pad), tail.get(pad.saturating_add(1))) {
+                (None, _) | (Some(b'\r'), None) => Class::Partial,
+                (Some(b'\r'), Some(b'\n')) => Class::Part(full.saturating_add(pad).saturating_add(2)),
+                _ => Class::No,
+            }
+        }
+    }
+}
+
+/// One more than `MAX_PADDING`: enough to detect too much padding.
+const PAD_PROBE: usize = MAX_PADDING + 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Found {
+    /// A resolved delimiter starting at `at` with total length `len`.
+    Delim { at: usize, len: usize, close: bool },
+    /// A candidate at `at` that needs more bytes (never with `eof`).
+    HeldBack { at: usize },
+    /// No candidate anywhere in the input.
+    Nothing,
+}
+
+/// §9: finds and resolves the first candidate delimiter in `input`. With
+/// `allow_d0` the dash-boundary form is tried at offset 0 first.
+fn scan(input: &[u8], eof: bool, allow_d0: bool, boundary: &[u8]) -> Found {
+    let mut c = 0usize;
+    let mut try_d0 = allow_d0;
+    loop {
+        let (at, lead): (usize, &[u8]) = if try_d0 && input.first() == Some(&b'-') {
+            try_d0 = false;
+            (0, b"--")
+        } else {
+            try_d0 = false;
+            match input.get(c..).and_then(|r| r.iter().position(|&b| b == b'\r')) {
+                Some(off) => (c.saturating_add(off), b"\r\n--"),
+                None => return Found::Nothing,
+            }
+        };
+        match classify(input.get(at..).unwrap_or(&[]), lead, boundary) {
+            Class::Part(len) => return Found::Delim { at, len, close: false },
+            Class::Close(len) => return Found::Delim { at, len, close: true },
+            Class::Partial if !eof => return Found::HeldBack { at },
+            Class::No | Class::Partial => c = at.saturating_add(1),
+        }
     }
 }
 
@@ -201,9 +448,4 @@ pub(crate) fn quoted_string_end(s: &[u8]) -> Option<usize> {
 /// Non-empty sequence of RFC 7230 `tchar`.
 pub(crate) fn is_token(s: &[u8]) -> bool {
     !s.is_empty() && s.iter().all(|&b| is_tchar(b))
-}
-
-#[allow(dead_code)]
-fn unused_in_stub() -> (fn(u8) -> bool, fn(&[u8]) -> (usize, usize)) {
-    (is_ows, ows_trimmed_range)
 }
