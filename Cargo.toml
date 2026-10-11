@@ -5,8 +5,10 @@ edition = "2021"
 rust-version = "1.81"
 license = "MIT OR Apache-2.0"
 description = "Heap-free, panic-free, streaming multipart/form-data parser and encoder for no_std"
-repository = "https://example.invalid/nostd-multipart"
-publish = false
+repository = "https://github.com/CarloTUM/nostd-multipart"
+documentation = "https://docs.rs/nostd-multipart"
+readme = "README.md"
+exclude = ["fuzz/corpus", "fuzz/artifacts", "fuzz/target", "examples/thumbv7em-mock-flash/target", ".github"]
 keywords = ["multipart", "form-data", "no_std", "embedded", "streaming"]
 categories = ["no-std", "no-std::no-alloc", "parser-implementations", "embedded"]
 
