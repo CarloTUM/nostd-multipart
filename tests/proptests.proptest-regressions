@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e93c1a6be187a8a091fa19053cc58a6f0b6822da772eca3ce3cf282d8be6ea55 # shrinks to parts = [GenPart { name: "", filename: None, content_type: None, extra: [("Q", ""), ("Q", "")], data: [] }], seed = 0
