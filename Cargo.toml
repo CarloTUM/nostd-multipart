@@ -1,0 +1,44 @@
+[package]
+name = "nostd-multipart"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "MIT OR Apache-2.0"
+description = "Heap-free, panic-free, streaming multipart/form-data parser and encoder for no_std"
+repository = "https://example.invalid/nostd-multipart"
+publish = false
+keywords = ["multipart", "form-data", "no_std", "embedded", "streaming"]
+categories = ["no-std", "no-std::no-alloc", "parser-implementations", "embedded"]
+
+[features]
+default = []
+std = []
+embedded-io = ["dep:embedded-io"]
+embedded-io-async = ["dep:embedded-io-async"]
+
+[dependencies]
+embedded-io = { version = "0.7", optional = true, default-features = false }
+embedded-io-async = { version = "0.7", optional = true, default-features = false }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+multer = "3"
+futures = { version = "0.3", default-features = false, features = ["std", "executor"] }
+bytes = "1"
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng", "small_rng"] }
+
+[workspace]
+members = ["."]
+exclude = ["fuzz", "examples/thumbv7em-mock-flash"]
+
+[profile.test]
+opt-level = 2
+debug-assertions = true
+overflow-checks = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[[example]]
+name = "stream_upload"
+required-features = ["std"]
