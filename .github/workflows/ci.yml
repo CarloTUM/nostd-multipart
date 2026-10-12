@@ -2,7 +2,13 @@ name: CI
 
 on:
   push:
+    branches: [master]
   pull_request:
+
+# A newer push cancels the running CI for the same branch (no mail for stale runs).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
