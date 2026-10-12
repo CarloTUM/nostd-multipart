@@ -34,10 +34,16 @@ pub(crate) fn ows_trimmed_range(s: &[u8]) -> (usize, usize) {
     (start, s.len().saturating_sub(trailing).max(start))
 }
 
-/// `s` without leading and trailing SP/HTAB.
-pub(crate) fn trim_ows(s: &[u8]) -> &[u8] {
-    let (start, end) = ows_trimmed_range(s);
-    s.get(start..end).unwrap_or(&[])
+/// `s` without leading and trailing SP/HTAB. (Plain loops: cheaper for Kani than
+/// reusing `ows_trimmed_range`, and `content_disposition` calls this a lot.)
+pub(crate) fn trim_ows(mut s: &[u8]) -> &[u8] {
+    while let [b' ' | b'\t', rest @ ..] = s {
+        s = rest;
+    }
+    while let [rest @ .., b' ' | b'\t'] = s {
+        s = rest;
+    }
+    s
 }
 
 /// `(attr, value, quoted, rest)` of one parameter; `rest` is empty or starts at
