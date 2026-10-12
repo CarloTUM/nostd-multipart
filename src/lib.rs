@@ -63,9 +63,9 @@ pub use encoder::{boundary_from_random, Encoder, Part};
 pub use error::Error;
 pub use parser::{Event, Parser, MAX_PADDING};
 
-#[cfg(feature = "embedded-io-async")]
-pub use io::asynch::MultipartReaderAsync;
 #[cfg(feature = "embedded-io")]
-pub use io::blocking::MultipartReader;
+pub use io::MultipartReader;
+#[cfg(feature = "embedded-io-async")]
+pub use io::MultipartReaderAsync;
 #[cfg(any(feature = "embedded-io", feature = "embedded-io-async"))]
 pub use io::ReadError;

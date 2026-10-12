@@ -1,8 +1,6 @@
 //! The streaming parser (DESIGN.md §2–7, §9–10).
 
-use crate::chars::{
-    eq_ignore_case, is_ows, is_tchar, is_valid_boundary, ows_trimmed_range, trim_ows,
-};
+use crate::chars::{is_ows, is_token, is_valid_boundary, ows_trimmed_range, param, trim_ows};
 use crate::Error;
 
 /// Maximum number of SP/HTAB transport-padding bytes accepted between the boundary
@@ -142,25 +140,19 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
     /// indices, which lets adapters store it and build the `Event` later.
     pub(crate) fn step(&mut self, input: &[u8], eof: bool) -> Result<(usize, Option<Ev>), Error> {
         let step = match self.state {
-            State::Preamble { at_start } => self.preamble(input, eof, at_start),
-            State::Headers => self.headers(input, eof),
-            State::Body => self.body(input, eof),
             State::NewPart => {
                 self.state = State::Headers;
-                self.line_len = 0;
-                self.header_count = 0;
-                Ok((0, Some(Ev::PartStart)))
+                return Ok((0, Some(Ev::PartStart)));
             }
-            State::Finished => Ok((input.len(), Some(Ev::Finished))),
+            State::Finished => return Ok((input.len(), Some(Ev::Finished))),
             State::Failed(e) => Err(e),
+            _ if input.is_empty() && eof => Err(Error::UnexpectedEof),
+            _ if input.is_empty() => Ok((0, None)),
+            State::Preamble { at_start } => Ok(self.preamble(input, eof, at_start)),
+            State::Headers => self.headers(input),
+            State::Body => Ok(self.body(input, eof)),
         };
-        match step {
-            Ok(x) => Ok(x),
-            Err(e) => {
-                self.state = State::Failed(e);
-                Err(e)
-            }
-        }
+        step.inspect_err(|&e| self.state = State::Failed(e))
     }
 
     /// Turns an event description into the borrowed [`Event`]. `input` must be
@@ -183,65 +175,33 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
         }
     }
 
-    /// §10 Preamble.
-    fn preamble(
-        &mut self,
-        input: &[u8],
-        eof: bool,
-        at_start: bool,
-    ) -> Result<(usize, Option<Ev>), Error> {
-        match scan(input, eof, at_start, self.boundary) {
-            Found::Delim {
-                at,
-                len,
-                close: true,
-            } => {
-                self.state = State::Finished;
-                Ok((at.saturating_add(len), Some(Ev::Finished)))
+    /// §10 Preamble. `input` is non-empty.
+    fn preamble(&mut self, input: &[u8], eof: bool, at_start: bool) -> (usize, Option<Ev>) {
+        let (consumed, ev) = match scan(input, eof, at_start, self.boundary) {
+            Found::Delim { at, len, close } => {
+                let (state, ev) = if close {
+                    (State::Finished, Ev::Finished)
+                } else {
+                    (State::Headers, Ev::PartStart)
+                };
+                self.state = state;
+                return (at.saturating_add(len), Some(ev));
             }
-            Found::Delim {
-                at,
-                len,
-                close: false,
-            } => {
-                self.state = State::Headers;
-                self.line_len = 0;
-                self.header_count = 0;
-                Ok((at.saturating_add(len), Some(Ev::PartStart)))
-            }
-            Found::HeldBack { at } => {
-                if at > 0 {
-                    self.state = State::Preamble { at_start: false };
-                }
-                Ok((at, None))
-            }
-            Found::Nothing => {
-                if input.is_empty() {
-                    if eof {
-                        return Err(Error::UnexpectedEof);
-                    }
-                    return Ok((0, None));
-                }
-                self.state = State::Preamble { at_start: false };
-                Ok((input.len(), None))
-            }
+            Found::HeldBack { at } => (at, None),
+            Found::Nothing => (input.len(), None),
+        };
+        if consumed > 0 {
+            self.state = State::Preamble { at_start: false };
         }
+        (consumed, ev)
     }
 
-    /// §10 Headers.
-    fn headers(&mut self, input: &[u8], eof: bool) -> Result<(usize, Option<Ev>), Error> {
+    /// §10 Headers. `input` is non-empty; `line_len` and `header_count` are 0 at
+    /// the start of every part.
+    fn headers(&mut self, input: &[u8]) -> Result<(usize, Option<Ev>), Error> {
         let lf = input.iter().position(|&b| b == b'\n');
-        let take = match lf {
-            Some(i) => i.saturating_add(1),
-            None => input.len(),
-        };
+        let take = lf.map_or(input.len(), |i| i.saturating_add(1));
         let chunk = input.get(..take).unwrap_or(input);
-        if chunk.is_empty() {
-            if eof {
-                return Err(Error::UnexpectedEof);
-            }
-            return Ok((0, None));
-        }
         let new_len = self.line_len.saturating_add(chunk.len());
         if new_len > LINE {
             return Err(Error::HeaderTooLong); // 5.1
@@ -261,6 +221,7 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
         };
         if content.is_empty() {
             self.state = State::Body; // 5.3
+            self.header_count = 0;
             return Ok((take, Some(Ev::HeadersEnd)));
         }
         self.header_count = self.header_count.saturating_add(1);
@@ -288,34 +249,21 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
         ))
     }
 
-    /// §10 Body.
-    fn body(&mut self, input: &[u8], eof: bool) -> Result<(usize, Option<Ev>), Error> {
-        match scan(input, eof, false, self.boundary) {
+    /// §10 Body. `input` is non-empty.
+    fn body(&mut self, input: &[u8], eof: bool) -> (usize, Option<Ev>) {
+        let end = match scan(input, eof, false, self.boundary) {
             Found::Delim { at: 0, len, close } => {
                 self.state = if close {
                     State::Finished
                 } else {
                     State::NewPart
                 };
-                Ok((len, Some(Ev::PartEnd)))
+                return (len, Some(Ev::PartEnd));
             }
-            Found::Delim { at, .. } | Found::HeldBack { at } => {
-                if at == 0 {
-                    Ok((0, None))
-                } else {
-                    Ok((at, Some(Ev::Data { end: at })))
-                }
-            }
-            Found::Nothing => {
-                if input.is_empty() {
-                    if eof {
-                        return Err(Error::UnexpectedEof);
-                    }
-                    return Ok((0, None));
-                }
-                Ok((input.len(), Some(Ev::Data { end: input.len() })))
-            }
-        }
+            Found::Delim { at, .. } | Found::HeldBack { at } => at,
+            Found::Nothing => input.len(),
+        };
+        (end, (end > 0).then_some(Ev::Data { end }))
     }
 }
 
@@ -337,109 +285,78 @@ pub(crate) enum Ev {
     Finished,
 }
 
-/// Rule 3 classification of the bytes at a candidate position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Class {
-    /// A part delimiter of this total length.
-    Part(usize),
-    /// A close delimiter of this total length.
-    Close(usize),
-    /// Definitely not a delimiter.
-    No,
-    /// Undecidable with the bytes available.
-    Partial,
-}
-
-/// Classifies `s` against `lead ++ boundary` followed by rule 3's suffix.
-fn classify(s: &[u8], lead: &[u8], boundary: &[u8]) -> Class {
-    let full = lead.len().saturating_add(boundary.len());
-    let mut matched = 0usize;
-    for (&have, &want) in s.iter().zip(lead.iter().chain(boundary)) {
-        if have != want {
-            return Class::No;
-        }
-        matched = matched.saturating_add(1);
-    }
-    if matched < full {
-        return Class::Partial;
-    }
-    let tail = s.get(full..).unwrap_or(&[]);
-    match tail.first() {
-        None => Class::Partial,
-        Some(b'-') => match tail.get(1) {
-            None => Class::Partial,
-            Some(b'-') => Class::Close(full.saturating_add(2)),
-            Some(_) => Class::No,
-        },
-        Some(_) => {
-            let pad = tail
-                .iter()
-                .take(PAD_PROBE)
-                .take_while(|&&b| is_ows(b))
-                .count();
-            if pad > MAX_PADDING {
-                return Class::No;
-            }
-            match (tail.get(pad), tail.get(pad.saturating_add(1))) {
-                (None, _) | (Some(b'\r'), None) => Class::Partial,
-                (Some(b'\r'), Some(b'\n')) => {
-                    Class::Part(full.saturating_add(pad).saturating_add(2))
-                }
-                _ => Class::No,
-            }
-        }
-    }
-}
-
-/// One more than `MAX_PADDING`: enough to detect too much padding.
-const PAD_PROBE: usize = MAX_PADDING + 1;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Found {
     /// A resolved delimiter starting at `at` with total length `len`.
     Delim { at: usize, len: usize, close: bool },
     /// A candidate at `at` that needs more bytes (never with `eof`).
     HeldBack { at: usize },
-    /// No candidate anywhere in the input.
+    /// No delimiter (`classify`: definitely not one here; `scan`: none anywhere).
     Nothing,
+}
+
+/// Rule 3: classifies `s` against `lead ++ boundary` followed by a part or close
+/// suffix. `HeldBack` means undecidable with the bytes available.
+fn classify(s: &[u8], lead: &[u8], boundary: &[u8]) -> Found {
+    let full = lead.len().saturating_add(boundary.len());
+    if !s
+        .iter()
+        .zip(lead.iter().chain(boundary))
+        .all(|(a, b)| a == b)
+    {
+        return Found::Nothing;
+    }
+    let Some(tail) = s.get(full..) else {
+        return Found::HeldBack { at: 0 };
+    };
+    let pad = tail
+        .iter()
+        .take(MAX_PADDING + 1)
+        .take_while(|&&b| is_ows(b))
+        .count();
+    let (len, close) = match (
+        tail.first(),
+        tail.get(1),
+        tail.get(pad),
+        tail.get(pad.saturating_add(1)),
+    ) {
+        (Some(b'-'), Some(b'-'), ..) => (2, true),
+        (None | Some(b'-'), None, ..) | (_, _, None | Some(b'\r'), None) if pad <= MAX_PADDING => {
+            return Found::HeldBack { at: 0 }
+        }
+        (Some(b'-'), ..) => return Found::Nothing,
+        (.., Some(b'\r'), Some(b'\n')) if pad <= MAX_PADDING => (pad.saturating_add(2), false),
+        _ => return Found::Nothing,
+    };
+    Found::Delim {
+        at: 0,
+        len: full.saturating_add(len),
+        close,
+    }
 }
 
 /// §9: finds and resolves the first candidate delimiter in `input`. With
 /// `allow_d0` the dash-boundary form is tried at offset 0 first.
 fn scan(input: &[u8], eof: bool, allow_d0: bool, boundary: &[u8]) -> Found {
-    let mut c = 0usize;
-    let mut try_d0 = allow_d0;
+    let mut from = 0usize;
+    let mut try_d0 = allow_d0 && input.first() == Some(&b'-');
     loop {
-        let (at, lead): (usize, &[u8]) = if try_d0 && input.first() == Some(&b'-') {
-            try_d0 = false;
+        let (at, lead): (usize, &[u8]) = if try_d0 {
             (0, b"--")
         } else {
-            try_d0 = false;
             match input
-                .get(c..)
+                .get(from..)
                 .and_then(|r| r.iter().position(|&b| b == b'\r'))
             {
-                Some(off) => (c.saturating_add(off), b"\r\n--"),
+                Some(off) => (from.saturating_add(off), b"\r\n--"),
                 None => return Found::Nothing,
             }
         };
+        try_d0 = false;
         match classify(input.get(at..).unwrap_or(&[]), lead, boundary) {
-            Class::Part(len) => {
-                return Found::Delim {
-                    at,
-                    len,
-                    close: false,
-                }
-            }
-            Class::Close(len) => {
-                return Found::Delim {
-                    at,
-                    len,
-                    close: true,
-                }
-            }
-            Class::Partial if !eof => return Found::HeldBack { at },
-            Class::No | Class::Partial => c = at.saturating_add(1),
+            Found::Delim { len, close, .. } => return Found::Delim { at, len, close },
+            Found::HeldBack { .. } if !eof => return Found::HeldBack { at },
+            _ => from = at.saturating_add(1),
         }
     }
 }
@@ -448,7 +365,7 @@ fn scan(input: &[u8], eof: bool, allow_d0: bool, boundary: &[u8]) -> Found {
 fn boundary_param(ct: &[u8]) -> Option<&[u8]> {
     let slash = ct.iter().position(|&b| b == b'/')?;
     let (mtype, rest) = ct.split_at_checked(slash)?;
-    if !eq_ignore_case(trim_ows(mtype), b"multipart") {
+    if !trim_ows(mtype).eq_ignore_ascii_case(b"multipart") {
         return None;
     }
     let rest = rest.get(1..)?;
@@ -457,55 +374,14 @@ fn boundary_param(ct: &[u8]) -> Option<&[u8]> {
     if !is_token(trim_ows(subtype)) {
         return None;
     }
-    while let Some(after_semi) = params.strip_prefix(b";") {
-        let s = trim_ows(after_semi);
-        let eq = s.iter().position(|&b| b == b'=')?;
-        let (attr, after_eq) = s.split_at_checked(eq)?;
-        let attr = trim_ows(attr);
-        if !is_token(attr) {
+    loop {
+        let (attr, value, quoted, rest) = param(params.strip_prefix(b";")?).ok()??;
+        if !quoted && !is_token(value) {
             return None;
         }
-        let v = trim_ows(after_eq.get(1..)?);
-        let (value, rest) = if let Some(inner) = v.strip_prefix(b"\"") {
-            let close = quoted_string_end(inner)?;
-            let (value, rest) = inner.split_at_checked(close)?;
-            (value, trim_ows(rest.get(1..)?))
-        } else {
-            let end = v.iter().position(|&b| b == b';').unwrap_or(v.len());
-            let (value, rest) = v.split_at_checked(end)?;
-            let value = trim_ows(value);
-            if !is_token(value) {
-                return None;
-            }
-            (value, rest)
-        };
-        if eq_ignore_case(attr, b"boundary") {
+        if attr.eq_ignore_ascii_case(b"boundary") {
             return Some(value);
         }
         params = rest;
     }
-    None
-}
-
-/// Index of the closing `"` of a quoted-string whose opening quote was removed,
-/// honouring `\x` quoted-pairs.
-pub(crate) fn quoted_string_end(s: &[u8]) -> Option<usize> {
-    let mut i = 0usize;
-    let mut escaped = false;
-    for &b in s {
-        if escaped {
-            escaped = false;
-        } else if b == b'\\' {
-            escaped = true;
-        } else if b == b'"' {
-            return Some(i);
-        }
-        i = i.saturating_add(1);
-    }
-    None
-}
-
-/// Non-empty sequence of RFC 7230 `tchar`.
-pub(crate) fn is_token(s: &[u8]) -> bool {
-    !s.is_empty() && s.iter().all(|&b| is_tchar(b))
 }

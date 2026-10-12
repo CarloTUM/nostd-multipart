@@ -119,14 +119,9 @@ fn count_u64(it: impl Iterator<Item = u8>) -> u64 {
 fn copy_stream(stream: impl Iterator<Item = u8>, pos: &mut usize, out: &mut [u8]) -> (usize, bool) {
     let mut it = stream.skip(*pos).peekable();
     let mut written = 0usize;
-    for slot in out.iter_mut() {
-        match it.next() {
-            Some(b) => {
-                *slot = b;
-                written = written.saturating_add(1);
-            }
-            None => break,
-        }
+    for (slot, b) in out.iter_mut().zip(&mut it) {
+        *slot = b;
+        written = written.saturating_add(1);
     }
     let done = it.peek().is_none();
     *pos = if done { 0 } else { pos.saturating_add(written) };
@@ -139,51 +134,15 @@ fn bytes(s: &[u8]) -> impl Iterator<Item = u8> + '_ {
 
 /// WHATWG escaping of one byte of a name or filename, plus `\` → `\\` so the
 /// value survives RFC 2183 quoted-pair decoding (DESIGN.md §11).
-fn escape(b: u8) -> Esc {
-    match b {
-        b'"' => Esc::new(*b"%22"),
-        b'\r' => Esc::new(*b"%0D"),
-        b'\n' => Esc::new(*b"%0A"),
-        b'\\' => Esc {
-            buf: *b"\\\\\0",
-            len: 2,
-            idx: 0,
-        },
-        other => Esc {
-            buf: [other, 0, 0],
-            len: 1,
-            idx: 0,
-        },
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Esc {
-    buf: [u8; 3],
-    len: u8,
-    idx: u8,
-}
-
-impl Esc {
-    const fn new(buf: [u8; 3]) -> Self {
-        Esc {
-            buf,
-            len: 3,
-            idx: 0,
-        }
-    }
-}
-
-impl Iterator for Esc {
-    type Item = u8;
-    fn next(&mut self) -> Option<u8> {
-        if self.idx >= self.len {
-            return None;
-        }
-        let b = self.buf.get(usize::from(self.idx)).copied();
-        self.idx = self.idx.saturating_add(1);
-        b
-    }
+fn escape(b: u8) -> impl Iterator<Item = u8> {
+    let (buf, len) = match b {
+        b'"' => (*b"%22", 3),
+        b'\r' => (*b"%0D", 3),
+        b'\n' => (*b"%0A", 3),
+        b'\\' => (*b"\\\\\0", 2),
+        b => ([b, 0, 0], 1),
+    };
+    buf.into_iter().take(len)
 }
 
 /// The byte stream of a part's prefix (§11).
@@ -232,7 +191,8 @@ pub fn boundary_from_random<const N: usize>(random: &[u8; N]) -> Result<[u8; N],
     fill_boundary(random, &mut out).map(|()| out)
 }
 
-/// Non-generic worker of [`boundary_from_random`].
+/// Non-generic worker of [`boundary_from_random`]: one copy in the binary for
+/// all `N`, and llvm-cov does not count an uncovered per-`N` instantiation.
 fn fill_boundary(random: &[u8], out: &mut [u8]) -> Result<(), Error> {
     if random.is_empty() || random.len() > 70 {
         return Err(Error::Boundary);

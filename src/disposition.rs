@@ -1,7 +1,6 @@
 //! `Content-Disposition` helper (DESIGN.md rule 8). Pure functions, no state.
 
-use crate::chars::{eq_ignore_case, trim_ows};
-use crate::parser::{is_token, quoted_string_end};
+use crate::chars::{is_token, param, trim_ows};
 use crate::Error;
 
 /// A parsed `Content-Disposition` header value.
@@ -23,7 +22,7 @@ impl<'a> ContentDisposition<'a> {
     /// `true` if the disposition type is `form-data` (case-insensitive).
     #[must_use]
     pub fn is_form_data(&self) -> bool {
-        eq_ignore_case(self.disposition_type, b"form-data")
+        self.disposition_type.eq_ignore_ascii_case(b"form-data")
     }
 
     /// The `name` parameter, if present (first occurrence).
@@ -173,38 +172,14 @@ pub fn content_disposition(value: &[u8]) -> Result<ContentDisposition<'_>, Error
         filename_star: None,
     };
     while let Some(after_semi) = rest.strip_prefix(b";") {
-        let s = trim_ows(after_semi);
-        if s.is_empty() {
+        let Some((attr, raw, _, tail)) = param(after_semi)? else {
             break;
-        }
-        let eq = s
-            .iter()
-            .position(|&b| b == b'=')
-            .ok_or(Error::Disposition)?;
-        let (attr, after_eq) = s.split_at_checked(eq).ok_or(Error::Disposition)?;
-        let attr = trim_ows(attr);
-        if !is_token(attr) {
-            return Err(Error::Disposition);
-        }
-        let v = trim_ows(after_eq.get(1..).unwrap_or(&[]));
-        let (raw, tail) = if let Some(inner) = v.strip_prefix(b"\"") {
-            let close = quoted_string_end(inner).ok_or(Error::Disposition)?;
-            let (raw, tail) = inner.split_at_checked(close).ok_or(Error::Disposition)?;
-            let tail = trim_ows(tail.get(1..).unwrap_or(&[]));
-            if !tail.is_empty() && !tail.starts_with(b";") {
-                return Err(Error::Disposition);
-            }
-            (raw, tail)
-        } else {
-            let end = v.iter().position(|&b| b == b';').unwrap_or(v.len());
-            let (raw, tail) = v.split_at_checked(end).ok_or(Error::Disposition)?;
-            (trim_ows(raw), tail)
         };
-        if eq_ignore_case(attr, b"name") {
+        if attr.eq_ignore_ascii_case(b"name") {
             cd.name.get_or_insert(ParamValue { raw });
-        } else if eq_ignore_case(attr, b"filename") {
+        } else if attr.eq_ignore_ascii_case(b"filename") {
             cd.filename.get_or_insert(ParamValue { raw });
-        } else if eq_ignore_case(attr, b"filename*") {
+        } else if attr.eq_ignore_ascii_case(b"filename*") {
             cd.filename_star.get_or_insert(raw);
         }
         rest = tail;

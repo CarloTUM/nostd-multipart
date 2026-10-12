@@ -1,46 +1,15 @@
 //! Byte classes from the RFCs (DESIGN.md rules 1 and 5).
 
+use crate::Error;
+
 /// RFC 2046 `bchars`.
-pub(crate) const fn is_bchar(b: u8) -> bool {
-    b.is_ascii_alphanumeric()
-        || matches!(
-            b,
-            b'\''
-                | b'('
-                | b')'
-                | b'+'
-                | b'_'
-                | b','
-                | b'-'
-                | b'.'
-                | b'/'
-                | b':'
-                | b'='
-                | b'?'
-                | b' '
-        )
+fn is_bchar(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"'()+_,-./:=? ".contains(&b)
 }
 
 /// RFC 7230 `tchar`.
-pub(crate) const fn is_tchar(b: u8) -> bool {
-    b.is_ascii_alphanumeric()
-        || matches!(
-            b,
-            b'!' | b'#'
-                | b'$'
-                | b'%'
-                | b'&'
-                | b'\''
-                | b'*'
-                | b'+'
-                | b'-'
-                | b'.'
-                | b'^'
-                | b'_'
-                | b'`'
-                | b'|'
-                | b'~'
-        )
+fn is_tchar(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
 }
 
 /// SP or HTAB.
@@ -50,37 +19,68 @@ pub(crate) const fn is_ows(b: u8) -> bool {
 
 /// Rule 1: 1–70 bchars, last byte not SP.
 pub(crate) fn is_valid_boundary(b: &[u8]) -> bool {
-    !b.is_empty() && b.len() <= 70 && b.iter().all(|&c| is_bchar(c)) && b.last() != Some(&b' ')
+    b.len() <= 70 && b.iter().all(|&c| is_bchar(c)) && !matches!(b.last(), None | Some(b' '))
 }
 
-/// `s` without leading and trailing SP/HTAB.
-pub(crate) fn trim_ows(mut s: &[u8]) -> &[u8] {
-    while let Some((&first, rest)) = s.split_first() {
-        if is_ows(first) {
-            s = rest;
-        } else {
-            break;
-        }
-    }
-    while let Some((&last, rest)) = s.split_last() {
-        if is_ows(last) {
-            s = rest;
-        } else {
-            break;
-        }
-    }
-    s
-}
-
-/// `a` and `b` are equal ignoring ASCII case.
-pub(crate) fn eq_ignore_case(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.eq_ignore_ascii_case(y))
+/// Non-empty sequence of RFC 7230 `tchar`.
+pub(crate) fn is_token(s: &[u8]) -> bool {
+    !s.is_empty() && s.iter().all(|&b| is_tchar(b))
 }
 
 /// `(start, end)` of `s` without leading and trailing SP/HTAB (`s[start..end]`).
 pub(crate) fn ows_trimmed_range(s: &[u8]) -> (usize, usize) {
     let start = s.iter().take_while(|&&b| is_ows(b)).count();
     let trailing = s.iter().rev().take_while(|&&b| is_ows(b)).count();
-    let end = s.len().saturating_sub(trailing).max(start);
-    (start, end)
+    (start, s.len().saturating_sub(trailing).max(start))
+}
+
+/// `s` without leading and trailing SP/HTAB.
+pub(crate) fn trim_ows(s: &[u8]) -> &[u8] {
+    let (start, end) = ows_trimmed_range(s);
+    s.get(start..end).unwrap_or(&[])
+}
+
+/// `(attr, value, quoted, rest)` of one parameter; `rest` is empty or starts at
+/// the next `;`. A quoted value is returned without its quotes, undecoded.
+type Param<'a> = (&'a [u8], &'a [u8], bool, &'a [u8]);
+
+/// The parameter at the start of `s` (the text after a `;`); `None` if blank.
+pub(crate) fn param(s: &[u8]) -> Result<Option<Param<'_>>, Error> {
+    let s = trim_ows(s);
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let eq = s
+        .iter()
+        .position(|&b| b == b'=')
+        .ok_or(Error::Disposition)?;
+    let (attr, v) = s.split_at_checked(eq).ok_or(Error::Disposition)?;
+    let attr = trim_ows(attr);
+    if !is_token(attr) {
+        return Err(Error::Disposition);
+    }
+    let v = trim_ows(v.get(1..).unwrap_or(&[]));
+    if let Some(inner) = v.strip_prefix(b"\"") {
+        let close = quoted_string_end(inner).ok_or(Error::Disposition)?;
+        let (value, tail) = inner.split_at_checked(close).ok_or(Error::Disposition)?;
+        let tail = trim_ows(tail.get(1..).unwrap_or(&[]));
+        if !tail.is_empty() && !tail.starts_with(b";") {
+            return Err(Error::Disposition);
+        }
+        return Ok(Some((attr, value, true, tail)));
+    }
+    let end = v.iter().position(|&b| b == b';').unwrap_or(v.len());
+    let (value, tail) = v.split_at_checked(end).ok_or(Error::Disposition)?;
+    Ok(Some((attr, trim_ows(value), false, tail)))
+}
+
+/// Index of the closing `"` of a quoted-string whose opening quote was removed,
+/// honouring `\x` quoted-pairs.
+fn quoted_string_end(s: &[u8]) -> Option<usize> {
+    let mut escaped = false;
+    s.iter().position(|&b| {
+        let close = !escaped && b == b'"';
+        escaped = !escaped && b == b'\\';
+        close
+    })
 }
