@@ -2,14 +2,21 @@
 
 use crate::Error;
 
+// `matches!`, not `b"...".contains(&b)`: the latter is a memchr loop longer
+// than the Kani harnesses' unwind bound.
+
 /// RFC 2046 `bchars`.
-fn is_bchar(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b"'()+_,-./:=? ".contains(&b)
+const fn is_bchar(b: u8) -> bool {
+    #[rustfmt::skip]
+    let special = matches!(b, b'\'' | b'(' | b')' | b'+' | b'_' | b',' | b'-' | b'.' | b'/' | b':' | b'=' | b'?' | b' ');
+    b.is_ascii_alphanumeric() || special
 }
 
 /// RFC 7230 `tchar`.
-fn is_tchar(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+const fn is_tchar(b: u8) -> bool {
+    #[rustfmt::skip]
+    let special = matches!(b, b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~');
+    b.is_ascii_alphanumeric() || special
 }
 
 /// SP or HTAB.
