@@ -7,12 +7,13 @@
 //! `consumed <= input.len()`, `Data` non-empty and within `consumed`, progress
 //! with `eof`.
 //!
-//! * default set (`cargo kani --all-features`, fits a 16 GB machine):
-//!   `parse_len4`, `parse_len6`, `parse_two_calls_len4`, `headers_len4`,
-//!   `cd_len4`, `boundary_from_random_valid`.
-//! * `RUSTFLAGS="--cfg kani_full"` adds the 8/10/12-byte rungs, the 6/8-byte
-//!   header and Content-Disposition rungs and the encoder harness; these need
-//!   tens of GB and hours (see README for what has been completed).
+//! * default set (`cargo kani --all-features`, fits a 16 GB CI runner):
+//!   `parse_len4`, `parse_len6`, `headers_len4`, `cd_len4`,
+//!   `boundary_from_random_valid`.
+//! * `RUSTFLAGS="--cfg kani_full"` adds the two-call harness, the 8/10/12-byte
+//!   rungs, the 6/8-byte header and Content-Disposition rungs and the encoder
+//!   harness; these need more memory and up to hours (see README for what has
+//!   been completed).
 
 use crate::{content_disposition, Event, Parser};
 
@@ -51,7 +52,9 @@ parse_harness!(parse_len8, 8, 12, kani_full);
 parse_harness!(parse_len10, 10, 14, kani_full);
 parse_harness!(parse_len12, 12, 16, kani_full);
 
-/// Two calls: any split of 4 symbolic bytes, then EOF.
+/// Two calls: any split of 4 symbolic bytes, then EOF. ~59M clauses: runs out
+/// of memory on a 16 GB CI runner, hence `kani_full`.
+#[cfg(kani_full)]
 #[kani::proof]
 #[kani::unwind(8)]
 fn parse_two_calls_len4() {

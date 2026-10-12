@@ -89,8 +89,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      # Default harness set (4/6-byte concrete bounds) fits the runner; the
-      # larger rungs need `--cfg kani_full` and a machine with tens of GB.
+      # Default harness set fits the 16 GB runner; the two-call harness and the
+      # larger rungs need `--cfg kani_full` and a bigger machine.
       - uses: model-checking/kani-github-action@v1
         with:
           args: --all-features
