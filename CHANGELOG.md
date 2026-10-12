@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 — 2026-10-12
+
+- `Parser::from_content_type` now rejects trailing garbage after a quoted
+  boundary (`boundary="x" junk`), as `DESIGN.md` already required.
+- Internal simplification of parser, `Content-Disposition` helper and
+  `embedded-io` adapters; public API unchanged.
+- README rewritten; Kani default proof set fits the 16 GB CI runner
+  (`parse_two_calls_len4` moved behind `kani_full`).
+
 ## 0.1.0 — 2026-10-11
 
 Initial release: streaming, zero-copy, heap-free `multipart/form-data` parser and
