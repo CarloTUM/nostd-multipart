@@ -110,4 +110,4 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo llvm-cov --all-features --fail-under-lines 100
+      - run: cargo llvm-cov --all-features --show-missing-lines --fail-under-lines 100
