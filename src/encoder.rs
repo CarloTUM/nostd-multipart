@@ -79,7 +79,7 @@ impl<'b> Encoder<'b> {
             return Err(Error::Header);
         }
         let (written, done) = copy_stream(
-            part_header_bytes(self.boundary, self.first, part),
+            part_header_bytes(self.boundary(), self.first, part),
             &mut self.pos,
             out,
         );
@@ -92,7 +92,7 @@ impl<'b> Encoder<'b> {
     /// Writes the next bytes of the close delimiter `CRLF --boundary-- CRLF`
     /// into `out`, resumably like [`Self::write_part_header`].
     pub fn write_close(&mut self, out: &mut [u8]) -> (usize, bool) {
-        copy_stream(close_bytes(self.boundary), &mut self.pos, out)
+        copy_stream(close_bytes(self.boundary()), &mut self.pos, out)
     }
 
     /// Exact length of the complete body for `parts` (each with its data length),
@@ -102,11 +102,11 @@ impl<'b> Encoder<'b> {
         let mut total = 0u64;
         let mut first = true;
         for (part, data_len) in parts {
-            let header = count_u64(part_header_bytes(self.boundary, first, part));
+            let header = count_u64(part_header_bytes(self.boundary(), first, part));
             total = total.saturating_add(header).saturating_add(*data_len);
             first = false;
         }
-        total.saturating_add(count_u64(close_bytes(self.boundary)))
+        total.saturating_add(count_u64(close_bytes(self.boundary())))
     }
 }
 
