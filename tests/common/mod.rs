@@ -9,6 +9,14 @@ pub mod oracle;
 use nostd_multipart::{Error, Event, Parser};
 pub use oracle::{OError, OEvent};
 
+/// Shorthands for expected events.
+pub fn h(n: &str, v: &str) -> OEvent {
+    OEvent::Header(n.as_bytes().to_vec(), v.as_bytes().to_vec())
+}
+pub fn d(x: &[u8]) -> OEvent {
+    OEvent::Data(x.to_vec())
+}
+
 /// Map crate errors onto oracle errors by name.
 pub fn oerr(e: Error) -> OError {
     match e {
@@ -192,6 +200,28 @@ pub fn check_against_oracle<const LINE: usize, const MAX_HEADERS: usize>(
         );
     }
     expected
+}
+
+/// Repairs part data by inserting an `x` after every `CRLF--boundary` that is
+/// followed by `-`, SP, HTAB, CR or the end, so it cannot end the part (RFC 2046
+/// caller obligation) while every other adversarial pattern is kept.
+pub fn make_safe(boundary: &[u8], data: &[u8]) -> Vec<u8> {
+    let d = [b"\r\n--", boundary].concat();
+    let mut out = Vec::with_capacity(data.len() + 8);
+    let mut i = 0;
+    while i < data.len() {
+        if data[i..].starts_with(&d) {
+            out.extend_from_slice(&d);
+            i += d.len();
+            if matches!(data.get(i), None | Some(b'-' | b' ' | b'\t' | b'\r')) {
+                out.push(b'x');
+            }
+        } else {
+            out.push(data[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// The composition of `n` selected by `mask` (bit i set = cut after byte i).

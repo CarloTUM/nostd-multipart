@@ -8,7 +8,6 @@
 mod common;
 use bytes::Bytes;
 use common::*;
-use nostd_multipart::{Event, Parser};
 use proptest::prelude::*;
 
 const B: &[u8] = b"xY-9";
@@ -161,41 +160,25 @@ struct SeenPart {
 }
 
 fn parse_ours(boundary: &[u8], body: &[u8], chunks: &[usize]) -> Vec<SeenPart> {
-    let mut parser = Parser::<512, 16>::new(boundary).unwrap();
+    let (events, err) = run_chunked::<512, 16>(boundary, body, chunks);
+    assert_eq!(err, None);
     let mut parts: Vec<SeenPart> = Vec::new();
-    let mut buf = Vec::new();
-    let mut pos = 0;
-    let mut ci = 0;
-    loop {
-        let eof = ci >= chunks.len();
-        let (used, ev) = parser.parse(&buf, eof).unwrap();
-        let mut done = false;
-        let had_event = ev.is_some();
+    for ev in events {
         match ev {
-            Some(Event::PartStart) => parts.push(SeenPart {
+            OEvent::PartStart => parts.push(SeenPart {
                 headers: vec![],
                 data: vec![],
             }),
-            Some(Event::Header { name, value }) => parts.last_mut().unwrap().headers.push((
-                String::from_utf8(name.to_ascii_lowercase()).unwrap(),
-                value.to_vec(),
-            )),
-            Some(Event::Data(d)) => parts.last_mut().unwrap().data.extend_from_slice(d),
-            Some(Event::Finished) => done = true,
-            Some(Event::HeadersEnd | Event::PartEnd) | None => {}
-        }
-        buf.drain(..used);
-        if done {
-            return parts;
-        }
-        if used == 0 && !had_event {
-            assert!(!eof);
-            let n = chunks[ci];
-            buf.extend_from_slice(&body[pos..pos + n]);
-            pos += n;
-            ci += 1;
+            OEvent::Header(n, v) => parts
+                .last_mut()
+                .unwrap()
+                .headers
+                .push((String::from_utf8(n.to_ascii_lowercase()).unwrap(), v)),
+            OEvent::Data(d) => parts.last_mut().unwrap().data = d,
+            _ => {}
         }
     }
+    parts
 }
 
 fn parse_multer(boundary: &[u8], body: &[u8], chunks: &[usize]) -> Vec<SeenPart> {

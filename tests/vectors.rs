@@ -9,13 +9,6 @@ use common::*;
 use nostd_multipart::{Error, Event, Parser};
 use OEvent::*;
 
-fn h(n: &str, v: &str) -> OEvent {
-    Header(n.as_bytes().to_vec(), v.as_bytes().to_vec())
-}
-fn d(x: &[u8]) -> OEvent {
-    Data(x.to_vec())
-}
-
 fn chunkings_for(len: usize) -> Box<dyn Iterator<Item = Vec<usize>>> {
     if len <= 24 {
         compositions(len)
@@ -368,135 +361,59 @@ fn lf_in_data_is_data() {
 
 #[test]
 fn eof_cases() {
-    fails(b"b", b"", vec![], OError::UnexpectedEof);
-    fails(b"b", b"--", vec![], OError::UnexpectedEof);
-    fails(b"b", b"--b", vec![], OError::UnexpectedEof);
-    fails(b"b", b"--b\r", vec![], OError::UnexpectedEof);
-    fails(b"b", b"--b\r\n", vec![PartStart], OError::UnexpectedEof);
-    fails(b"b", b"--b\r\nA: 1", vec![PartStart], OError::UnexpectedEof);
-    fails(
-        b"b",
-        b"--b\r\nA: 1\r\n",
-        vec![PartStart, h("A", "1")],
-        OError::UnexpectedEof,
-    );
-    fails(
-        b"b",
-        b"--b\r\nA: 1\r\n\r\n",
-        vec![PartStart, h("A", "1"), HeadersEnd],
-        OError::UnexpectedEof,
-    );
-    fails(
-        b"b",
-        b"--b\r\n\r\nxyz",
-        vec![PartStart, HeadersEnd, d(b"xyz")],
-        OError::UnexpectedEof,
-    );
-    fails(
-        b"b",
-        b"--b\r\n\r\nxyz\r\n--b",
-        vec![PartStart, HeadersEnd, d(b"xyz\r\n--b")],
-        OError::UnexpectedEof,
-    );
-    fails(
-        b"b",
-        b"--b\r\n\r\nxyz\r\n--b-",
-        vec![PartStart, HeadersEnd, d(b"xyz\r\n--b-")],
-        OError::UnexpectedEof,
-    );
-    fails(
-        b"b",
-        b"--b\r\n\r\nxyz\r\n--b\r",
-        vec![PartStart, HeadersEnd, d(b"xyz\r\n--b\r")],
-        OError::UnexpectedEof,
-    );
-    fails(
-        b"b",
-        b"--b\r\n\r\nxyz\r\n--b \r\n",
-        vec![PartStart, HeadersEnd, d(b"xyz"), PartEnd, PartStart],
-        OError::UnexpectedEof,
-    );
-    fails(b"b", b"pre", vec![], OError::UnexpectedEof);
-    fails(b"b", b"pre\r\n--b-", vec![], OError::UnexpectedEof);
+    let hdr = || vec![PartStart, h("A", "1")];
+    let data = |x: &[u8]| vec![PartStart, HeadersEnd, d(x)];
+    for (body, events) in [
+        (&b""[..], vec![]),
+        (b"--", vec![]),
+        (b"--b", vec![]),
+        (b"--b\r", vec![]),
+        (b"pre", vec![]),
+        (b"pre\r\n--b-", vec![]),
+        (b"--b\r\n", vec![PartStart]),
+        (b"--b\r\nA: 1", vec![PartStart]),
+        (b"--b\r\nA: 1\r\n", hdr()),
+        (b"--b\r\nA: 1\r\n\r\n", [hdr(), vec![HeadersEnd]].concat()),
+        (b"--b\r\n\r\nxyz", data(b"xyz")),
+        (b"--b\r\n\r\nxyz\r\n--b", data(b"xyz\r\n--b")),
+        (b"--b\r\n\r\nxyz\r\n--b-", data(b"xyz\r\n--b-")),
+        (b"--b\r\n\r\nxyz\r\n--b\r", data(b"xyz\r\n--b\r")),
+        (
+            b"--b\r\n\r\nxyz\r\n--b \r\n",
+            [data(b"xyz"), vec![PartEnd, PartStart]].concat(),
+        ),
+    ] {
+        fails(b"b", body, events, OError::UnexpectedEof);
+    }
 }
 
 #[test]
 fn header_errors() {
-    fails(
-        b"b",
-        b"--b\r\nA: 1\n\r\n\r\n--b--",
-        vec![PartStart],
-        OError::Header,
-    ); // bare LF
-    fails(b"b", b"--b\r\n\n\r\n--b--", vec![PartStart], OError::Header); // bare LF as empty line
+    for body in [
+        &b"--b\r\nA: 1\n\r\n\r\n--b--"[..], // bare LF
+        b"--b\r\n\n\r\n--b--",              // bare LF as empty line
+        b"--b\r\n\tA: 1\r\n\r\n--b--",      // leading HTAB
+        b"--b\r\nnocolon\r\n\r\n--b--",
+        b"--b\r\n: v\r\n\r\n--b--",          // empty name
+        b"--b\r\nA B: v\r\n\r\n--b--",       // SP in name
+        b"--b\r\nA : v\r\n\r\n--b--",        // SP before colon
+        b"--b\r\nA\xc3\xa9: v\r\n\r\n--b--", // non-ASCII name
+        b"--b\r\nA: 1\r2\r\n\r\n--b--",      // CR in value
+        b"--b\r\nA: 1\r\r\n\r\n--b--",       // CR before CRLF
+        b"--b\r\nA:\r\r\n\r\n--b--",
+        b"--b\r\n--b--\r\n\r\n--b--", // boundary line as header: no colon
+    ] {
+        fails(b"b", body, vec![PartStart], OError::Header);
+    }
+    // obs-fold
     fails(
         b"b",
         b"--b\r\nA: 1\r\n b\r\n\r\n--b--",
         vec![PartStart, h("A", "1")],
         OError::Header,
-    ); // obs-fold
-    fails(
-        b"b",
-        b"--b\r\n\tA: 1\r\n\r\n--b--",
-        vec![PartStart],
-        OError::Header,
-    ); // leading HTAB
-    fails(
-        b"b",
-        b"--b\r\nnocolon\r\n\r\n--b--",
-        vec![PartStart],
-        OError::Header,
     );
-    fails(
-        b"b",
-        b"--b\r\n: v\r\n\r\n--b--",
-        vec![PartStart],
-        OError::Header,
-    ); // empty name
-    fails(
-        b"b",
-        b"--b\r\nA B: v\r\n\r\n--b--",
-        vec![PartStart],
-        OError::Header,
-    ); // SP in name
-    fails(
-        b"b",
-        b"--b\r\nA : v\r\n\r\n--b--",
-        vec![PartStart],
-        OError::Header,
-    ); // SP before colon
-    fails(
-        b"b",
-        b"--b\r\nA\xc3\xa9: v\r\n\r\n--b--",
-        vec![PartStart],
-        OError::Header,
-    ); // non-ASCII name
-    fails(
-        b"b",
-        b"--b\r\nA: 1\r2\r\n\r\n--b--",
-        vec![PartStart],
-        OError::Header,
-    ); // CR in value
-    fails(
-        b"b",
-        b"--b\r\nA: 1\r\r\n\r\n--b--",
-        vec![PartStart],
-        OError::Header,
-    ); // CR before CRLF
-    fails(
-        b"b",
-        b"--b\r\nA:\r\r\n\r\n--b--",
-        vec![PartStart],
-        OError::Header,
-    );
-    fails(
-        b"b",
-        b"--b\r\n--b--\r\n\r\n--b--",
-        vec![PartStart],
-        OError::Header,
-    ); // boundary line as header: no colon
-       // "--b" is a valid token, so this is a header; the final "--b--" has no CRLF
-       // before it and is data.
+    // "--b" is a valid token, so this is a header; the final "--b--" has no CRLF
+    // before it and is data.
     fails(
         b"b",
         b"--b\r\n--b: x\r\n\r\n--b--",
@@ -512,53 +429,32 @@ fn header_errors() {
 
 #[test]
 fn header_values() {
-    ok(
-        b"b",
-        b"--b\r\nA:\r\n\r\n\r\n--b--",
-        vec![PartStart, h("A", ""), HeadersEnd, PartEnd, Finished],
-    );
-    ok(
-        b"b",
-        b"--b\r\nA: \t \r\n\r\n\r\n--b--",
-        vec![PartStart, h("A", ""), HeadersEnd, PartEnd, Finished],
-    );
-    ok(
-        b"b",
-        b"--b\r\nA:\t x \t\r\n\r\n\r\n--b--",
-        vec![PartStart, h("A", "x"), HeadersEnd, PartEnd, Finished],
-    );
-    ok(
-        b"b",
-        b"--b\r\nA: x  y\r\n\r\n\r\n--b--",
-        vec![PartStart, h("A", "x  y"), HeadersEnd, PartEnd, Finished],
-    );
-    ok(
-        b"b",
-        b"--b\r\nA: a:b:c\r\n\r\n\r\n--b--",
-        vec![PartStart, h("A", "a:b:c"), HeadersEnd, PartEnd, Finished],
-    );
-    ok(
-        b"b",
-        b"--b\r\nX-Name: \xc3\xa4\xf0\x9f\x98\x80\r\n\r\n\r\n--b--",
-        vec![
-            PartStart,
-            Header(b"X-Name".to_vec(), b"\xc3\xa4\xf0\x9f\x98\x80".to_vec()),
-            HeadersEnd,
-            PartEnd,
-            Finished,
-        ],
-    );
-    ok(
-        b"b",
-        b"--b\r\n!#$%&'*+-.^_`|~09Az: v\r\n\r\n\r\n--b--",
-        vec![
-            PartStart,
-            h("!#$%&'*+-.^_`|~09Az", "v"),
-            HeadersEnd,
-            PartEnd,
-            Finished,
-        ],
-    );
+    for (line, name, value) in [
+        (&b"A:"[..], &b"A"[..], &b""[..]),
+        (b"A: \t ", b"A", b""),
+        (b"A:\t x \t", b"A", b"x"),
+        (b"A: x  y", b"A", b"x  y"),
+        (b"A: a:b:c", b"A", b"a:b:c"),
+        (
+            b"X-Name: \xc3\xa4\xf0\x9f\x98\x80",
+            b"X-Name",
+            b"\xc3\xa4\xf0\x9f\x98\x80",
+        ),
+        (b"!#$%&'*+-.^_`|~09Az: v", b"!#$%&'*+-.^_`|~09Az", b"v"),
+        (
+            b"Content-Disposition: form-data; name=\"\"",
+            b"Content-Disposition",
+            b"form-data; name=\"\"",
+        ),
+    ] {
+        let body = [&b"--b\r\n"[..], line, b"\r\n\r\n\r\n--b--"].concat();
+        let header = Header(name.to_vec(), value.to_vec());
+        ok(
+            b"b",
+            &body,
+            vec![PartStart, header, HeadersEnd, PartEnd, Finished],
+        );
+    }
 }
 
 #[test]
@@ -585,21 +481,6 @@ fn duplicate_headers_and_missing_content_disposition() {
             h("Content-Type", "text/plain"),
             HeadersEnd,
             d(b"x"),
-            PartEnd,
-            Finished,
-        ],
-    );
-}
-
-#[test]
-fn empty_name_parameter_is_fine_for_the_parser() {
-    ok(
-        b"b",
-        b"--b\r\nContent-Disposition: form-data; name=\"\"\r\n\r\n\r\n--b--",
-        vec![
-            PartStart,
-            h("Content-Disposition", "form-data; name=\"\""),
-            HeadersEnd,
             PartEnd,
             Finished,
         ],
@@ -787,25 +668,22 @@ fn long_boundary_70() {
 
 #[test]
 fn boundary_validation() {
-    assert!(Parser::<64, 4>::new(b"a").is_ok());
-    assert!(Parser::<64, 4>::new(b"a b").is_ok());
-    assert!(Parser::<64, 4>::new(b"'()+_,-./:=?09azAZ").is_ok());
-    assert!(Parser::<64, 4>::new(&[b'x'; 70]).is_ok());
-    assert_eq!(Parser::<64, 4>::new(b"").err(), Some(Error::Boundary));
-    assert_eq!(
-        Parser::<64, 4>::new(&[b'x'; 71]).err(),
-        Some(Error::Boundary)
-    );
-    assert_eq!(Parser::<64, 4>::new(b"a ").err(), Some(Error::Boundary));
-    assert_eq!(Parser::<64, 4>::new(b" ").err(), Some(Error::Boundary));
-    assert_eq!(Parser::<64, 4>::new(b"a\"b").err(), Some(Error::Boundary));
-    assert_eq!(Parser::<64, 4>::new(b"a;b").err(), Some(Error::Boundary));
-    assert_eq!(Parser::<64, 4>::new(b"a\\b").err(), Some(Error::Boundary));
-    assert_eq!(Parser::<64, 4>::new(b"a\r\nb").err(), Some(Error::Boundary));
-    assert_eq!(
-        Parser::<64, 4>::new(b"\xc3\xa4").err(),
-        Some(Error::Boundary)
-    );
+    for good in [&b"a"[..], b"a b", b"'()+_,-./:=?09azAZ", &[b'x'; 70]] {
+        assert!(Parser::<64, 4>::new(good).is_ok());
+    }
+    for bad in [
+        &b""[..],
+        &[b'x'; 71],
+        b"a ",
+        b" ",
+        b"a\"b",
+        b"a;b",
+        b"a\\b",
+        b"a\r\nb",
+        b"\xc3\xa4",
+    ] {
+        assert_eq!(Parser::<64, 4>::new(bad).err(), Some(Error::Boundary));
+    }
     let (ev, err) = run_whole::<64, 4>(b"", b"----");
     assert_eq!((ev, err), (vec![], Some(OError::Boundary)));
 }
@@ -815,55 +693,34 @@ fn from_content_type() {
     fn b(ct: &[u8]) -> Result<Vec<u8>, Error> {
         Parser::<64, 4>::from_content_type(ct).map(|p| p.boundary().to_vec())
     }
-    assert_eq!(b(b"multipart/form-data; boundary=abc"), Ok(b"abc".to_vec()));
-    assert_eq!(b(b"multipart/form-data;boundary=abc"), Ok(b"abc".to_vec()));
-    assert_eq!(
-        b(b"multipart/form-data ; boundary = abc "),
-        Ok(b"abc".to_vec())
-    );
-    assert_eq!(
-        b(b"  multipart/form-data; boundary=abc"),
-        Ok(b"abc".to_vec())
-    );
-    assert_eq!(b(b"MULTIPART/Form-Data; BOUNDARY=abc"), Ok(b"abc".to_vec()));
-    assert_eq!(b(b"multipart/mixed; boundary=abc"), Ok(b"abc".to_vec()));
-    assert_eq!(
-        b(b"multipart/form-data; boundary=\"abc\""),
-        Ok(b"abc".to_vec())
-    );
-    assert_eq!(
-        b(b"multipart/form-data; boundary=\"a b/c:d\""),
-        Ok(b"a b/c:d".to_vec())
-    );
-    assert_eq!(
-        b(b"multipart/form-data; charset=utf-8; boundary=abc"),
-        Ok(b"abc".to_vec())
-    );
-    assert_eq!(
-        b(b"multipart/form-data; boundary=abc; charset=utf-8"),
-        Ok(b"abc".to_vec())
-    );
-    assert_eq!(
-        b(b"multipart/form-data; x=\"a;b\"; boundary=abc"),
-        Ok(b"abc".to_vec())
-    );
-    assert_eq!(
-        b(b"multipart/form-data; x=\"a\\\"b\"; boundary=abc"),
-        Ok(b"abc".to_vec())
-    );
-    assert_eq!(
-        b(b"multipart/form-data; boundary=abc--"),
-        Ok(b"abc--".to_vec())
-    );
-    assert_eq!(
-        b(b"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"),
-        Ok(b"----WebKitFormBoundary7MA4YWxkTrZu0gW".to_vec())
-    );
-    assert_eq!(
-        b(b"multipart/form-data; boundary=\"x\"; boundary=\"y\""),
-        Ok(b"x".to_vec())
-    ); // first wins
-    assert_eq!(b(b"multipart/form-data; boundary=a;b"), Ok(b"a".to_vec())); // later parameters are not validated
+    for (ct, boundary) in [
+        (&b"multipart/form-data; boundary=abc"[..], &b"abc"[..]),
+        (b"multipart/form-data;boundary=abc", b"abc"),
+        (b"multipart/form-data ; boundary = abc ", b"abc"),
+        (b"  multipart/form-data; boundary=abc", b"abc"),
+        (b"MULTIPART/Form-Data; BOUNDARY=abc", b"abc"),
+        (b"multipart/mixed; boundary=abc", b"abc"),
+        (b"multipart/form-data; boundary=\"abc\"", b"abc"),
+        (b"multipart/form-data; boundary=\"a b/c:d\"", b"a b/c:d"),
+        (b"multipart/form-data; charset=utf-8; boundary=abc", b"abc"),
+        (b"multipart/form-data; boundary=abc; charset=utf-8", b"abc"),
+        (b"multipart/form-data; x=\"a;b\"; boundary=abc", b"abc"),
+        (b"multipart/form-data; x=\"a\\\"b\"; boundary=abc", b"abc"),
+        (b"multipart/form-data; boundary=abc--", b"abc--"),
+        (
+            b"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW",
+            b"----WebKitFormBoundary7MA4YWxkTrZu0gW",
+        ),
+        (b"multipart/form-data; boundary=\"x\"; boundary=\"y\"", b"x"), // first wins
+        (b"multipart/form-data; boundary=a;b", b"a"), // later parameters are not validated
+    ] {
+        assert_eq!(
+            b(ct),
+            Ok(boundary.to_vec()),
+            "{:?}",
+            String::from_utf8_lossy(ct)
+        );
+    }
 
     for bad in [
         &b"text/plain; boundary=abc"[..],
@@ -896,6 +753,18 @@ fn from_content_type() {
     }
 }
 
+/// Feeds `body` until `HeadersEnd` and returns the unconsumed rest.
+fn to_body<'a>(p: &mut Parser<'_, 64, 4>, body: &'a [u8]) -> &'a [u8] {
+    let mut pos = 0;
+    loop {
+        let (used, ev) = p.parse(&body[pos..], false).unwrap();
+        pos += used;
+        if ev == Some(Event::HeadersEnd) {
+            return &body[pos..];
+        }
+    }
+}
+
 #[test]
 fn min_buffer_and_progress() {
     let mut p = Parser::<64, 4>::new(b"abc").unwrap();
@@ -905,15 +774,7 @@ fn min_buffer_and_progress() {
     let mut body = b"--abc\r\n\r\n\r\n--abc".to_vec();
     body.extend(std::iter::repeat(b' ').take(nostd_multipart::MAX_PADDING));
     body.push(b'\r');
-    let mut pos = 0;
-    loop {
-        let (used, ev) = p.parse(&body[pos..], false).unwrap();
-        pos += used;
-        if ev == Some(Event::HeadersEnd) {
-            break;
-        }
-    }
-    let tail = &body[pos..];
+    let tail = to_body(&mut p, &body);
     assert_eq!(tail.len(), p.min_buffer() - 1);
     assert_eq!(p.parse(tail, false), Ok((0, None)));
     // ... but with eof the held-back bytes are data.
@@ -926,15 +787,7 @@ fn min_buffer_and_progress() {
     let mut p = Parser::<64, 4>::new(b"abc").unwrap();
     let mut full = body.clone();
     full.push(b'\n');
-    let mut pos = 0;
-    loop {
-        let (used, ev) = p.parse(&full[pos..], false).unwrap();
-        pos += used;
-        if ev == Some(Event::HeadersEnd) {
-            break;
-        }
-    }
-    let tail = &full[pos..];
+    let tail = to_body(&mut p, &full);
     assert_eq!(tail.len(), p.min_buffer());
     assert_eq!(p.parse(tail, false), Ok((tail.len(), Some(Event::PartEnd))));
     assert_eq!(p.parse(b"", false), Ok((0, Some(Event::PartStart))));

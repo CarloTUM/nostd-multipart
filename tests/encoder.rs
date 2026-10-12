@@ -4,9 +4,7 @@
 
 mod common;
 use common::*;
-use nostd_multipart::{
-    boundary_from_random, content_disposition, Encoder, Error, Event, Parser, Part,
-};
+use nostd_multipart::{boundary_from_random, content_disposition, Encoder, Error, Parser, Part};
 use proptest::prelude::*;
 
 /// Encodes a whole body using `out` as the (possibly tiny) staging buffer.
@@ -124,28 +122,14 @@ fn errors() {
     assert_eq!(Encoder::new(b"a ").err(), Some(Error::Boundary));
     let mut enc = Encoder::new(b"b").unwrap();
     let mut out = [0u8; 100];
-    assert_eq!(
-        enc.write_part_header(
-            &Part {
-                name: b"n",
-                filename: None,
-                content_type: Some(b"text/plain\r\nX: y")
-            },
-            &mut out
-        ),
-        Err(Error::Header)
-    );
-    assert_eq!(
-        enc.write_part_header(
-            &Part {
-                name: b"n",
-                filename: None,
-                content_type: Some(b"a\nb")
-            },
-            &mut out
-        ),
-        Err(Error::Header)
-    );
+    for ct in [&b"text/plain\r\nX: y"[..], b"a\nb"] {
+        let part = Part {
+            name: b"n",
+            filename: None,
+            content_type: Some(ct),
+        };
+        assert_eq!(enc.write_part_header(&part, &mut out), Err(Error::Header));
+    }
     // The encoder is still usable afterwards.
     assert!(
         enc.write_part_header(
@@ -277,7 +261,11 @@ fn rt_part() -> impl Strategy<Value = RtPart> {
             name,
             filename,
             content_type,
-            data: make_safe(&data),
+            data: {
+                let safe = make_safe(RT_BOUNDARY, &data);
+                assert!(data_is_safe(&safe));
+                safe
+            },
         })
 }
 
@@ -293,28 +281,6 @@ fn data_is_safe(data: &[u8]) -> bool {
                 None | Some(b'-' | b' ' | b'\t' | b'\r')
             )
     })
-}
-
-/// Repairs generated data by inserting an `x` after every unsafe `D` occurrence,
-/// so the generator keeps every adversarial pattern and nothing is rejected.
-fn make_safe(data: &[u8]) -> Vec<u8> {
-    let d = [b"\r\n--", RT_BOUNDARY].concat();
-    let mut out = Vec::with_capacity(data.len() + 8);
-    let mut i = 0;
-    while i < data.len() {
-        if data[i..].starts_with(&d) {
-            out.extend_from_slice(&d);
-            i += d.len();
-            if matches!(data.get(i), None | Some(b'-' | b' ' | b'\t' | b'\r')) {
-                out.push(b'x');
-            }
-        } else {
-            out.push(data[i]);
-            i += 1;
-        }
-    }
-    assert!(data_is_safe(&out));
-    out
 }
 
 proptest! {
@@ -338,43 +304,27 @@ proptest! {
         prop_assert_eq!(enc.content_length(&lens), body.len() as u64);
 
         for chunks in standard_chunkings(body.len(), 3, seed) {
-            let mut parser = Parser::<512, 16>::new(RT_BOUNDARY).unwrap();
+            let (events, err) = run_chunked::<512, 16>(RT_BOUNDARY, &body, &chunks);
+            prop_assert_eq!(err, None);
             let mut got: Vec<RtPart> = Vec::new();
-            let mut buf = Vec::new();
-            let mut pos = 0;
-            let mut ci = 0;
-            loop {
-                let eof = ci >= chunks.len();
-                let (used, ev) = parser.parse(&buf, eof).unwrap();
-                let had = ev.is_some();
-                let mut done = false;
+            for ev in events {
                 match ev {
-                    Some(Event::PartStart) => got.push(RtPart { name: vec![], filename: None, content_type: None, data: vec![] }),
-                    Some(Event::Header { name, value }) => {
+                    OEvent::PartStart => got.push(RtPart { name: vec![], filename: None, content_type: None, data: vec![] }),
+                    OEvent::Header(name, value) => {
                         let cur = got.last_mut().unwrap();
                         if name.eq_ignore_ascii_case(b"content-disposition") {
-                            let cd = content_disposition(value).unwrap();
+                            let cd = content_disposition(&value).unwrap();
                             prop_assert!(cd.is_form_data());
                             cur.name = cd.name().unwrap().bytes().collect();
                             cur.filename = cd.filename().map(|f| f.bytes().collect());
                         } else if name.eq_ignore_ascii_case(b"content-type") {
-                            cur.content_type = Some(value.to_vec());
+                            cur.content_type = Some(value);
                         } else {
                             prop_assert!(false, "unexpected header {:?}", name);
                         }
                     }
-                    Some(Event::Data(d)) => got.last_mut().unwrap().data.extend_from_slice(d),
-                    Some(Event::Finished) => done = true,
-                    Some(Event::HeadersEnd | Event::PartEnd) | None => {}
-                }
-                buf.drain(..used);
-                if done { break; }
-                if used == 0 && !had {
-                    prop_assert!(!eof);
-                    let n = chunks[ci];
-                    buf.extend_from_slice(&body[pos..pos + n]);
-                    pos += n;
-                    ci += 1;
+                    OEvent::Data(d) => got.last_mut().unwrap().data = d,
+                    _ => {}
                 }
             }
             prop_assert_eq!(got.len(), parts.len());

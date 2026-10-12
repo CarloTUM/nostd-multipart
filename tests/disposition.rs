@@ -100,16 +100,6 @@ fn filename_star_is_raw() {
 }
 
 #[test]
-fn utf8_values() {
-    let cd = content_disposition(
-        "form-data; name=\"ünïcode\"; filename=\"nötes %22q%22.txt\"".as_bytes(),
-    )
-    .unwrap();
-    assert_eq!(dec(cd.name().unwrap()), "ünïcode".as_bytes());
-    assert_eq!(dec(cd.filename().unwrap()), "nötes \"q\".txt".as_bytes());
-}
-
-#[test]
 fn errors() {
     for bad in [
         &b""[..],

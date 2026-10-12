@@ -12,6 +12,21 @@ struct Chunky<'a> {
     reads_left: Option<usize>,
 }
 
+impl Chunky<'_> {
+    fn take(&mut self, buf: &mut [u8]) -> Result<usize, Boom> {
+        if let Some(n) = &mut self.reads_left {
+            if *n == 0 {
+                return Err(Boom);
+            }
+            *n -= 1;
+        }
+        let n = self.max.min(buf.len()).min(self.data.len());
+        buf[..n].copy_from_slice(&self.data[..n]);
+        self.data = &self.data[n..];
+        Ok(n)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Boom;
 
@@ -44,16 +59,7 @@ impl embedded_io::ErrorType for Chunky<'_> {
 #[cfg(feature = "embedded-io")]
 impl embedded_io::Read for Chunky<'_> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Boom> {
-        if let Some(n) = &mut self.reads_left {
-            if *n == 0 {
-                return Err(Boom);
-            }
-            *n -= 1;
-        }
-        let n = self.max.min(buf.len()).min(self.data.len());
-        buf[..n].copy_from_slice(&self.data[..n]);
-        self.data = &self.data[n..];
-        Ok(n)
+        self.take(buf)
     }
 }
 
@@ -135,12 +141,6 @@ mod blocking {
 
     #[test]
     fn buffer_too_small() {
-        // A candidate delimiter prefix that never resolves inside 14 bytes...
-        // "--b\r\n\r\n" then data "x\r\n--b" + pad... Build a body where the
-        // parser must hold back more than the buffer holds.
-        let r = run::<14>(100, None);
-        // With BODY it may or may not hit; craft a dedicated one:
-        let _ = r;
         let body = b"--b\r\n\r\nx\r\n--b        \r\n\r\n\r\n--b--"; // 8 pads: delimiter needs 15 bytes of lookahead
         let parser = Parser::<64, 4>::new(b"b").unwrap();
         let mut r = MultipartReader::<_, 14, 64, 4>::new(
@@ -232,17 +232,7 @@ mod asynch {
     impl embedded_io_async::Read for AsyncChunky<'_> {
         async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Boom> {
             futures::future::ready(()).await; // yield once to exercise the state machine
-            let c = &mut self.0;
-            if let Some(n) = &mut c.reads_left {
-                if *n == 0 {
-                    return Err(Boom);
-                }
-                *n -= 1;
-            }
-            let n = c.max.min(buf.len()).min(c.data.len());
-            buf[..n].copy_from_slice(&c.data[..n]);
-            c.data = &c.data[n..];
-            Ok(n)
+            self.0.take(buf)
         }
     }
 

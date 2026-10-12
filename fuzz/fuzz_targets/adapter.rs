@@ -3,14 +3,14 @@
 //! `BufferTooSmall` only when the buffer is smaller than `min_buffer()`.
 #![no_main]
 
-#[path = "../../tests/oracle.rs"]
+#[path = "../../tests/common/mod.rs"]
 #[allow(dead_code)]
-mod oracle;
+mod common;
 
 use arbitrary::Arbitrary;
+use common::{oerr, oracle, Collector, OError, OEvent};
 use libfuzzer_sys::fuzz_target;
-use nostd_multipart::{Error, Event, MultipartReader, Parser, ReadError};
-use oracle::{OError, OEvent};
+use nostd_multipart::{Event, MultipartReader, Parser, ReadError};
 
 #[derive(Arbitrary, Debug)]
 struct Input<'a> {
@@ -50,32 +50,14 @@ fn run<const BUF: usize>(
         },
         parser,
     );
-    let mut events = Vec::new();
-    let mut pending: Vec<u8> = Vec::new();
-    let flush = |pending: &mut Vec<u8>, events: &mut Vec<OEvent>| {
-        if !pending.is_empty() {
-            events.push(OEvent::Data(std::mem::take(pending)));
-        }
-    };
+    let mut col = Collector::default();
     loop {
         match r.next_event() {
-            Ok(Event::Data(d)) => pending.extend_from_slice(d),
-            Ok(ev) => {
-                flush(&mut pending, &mut events);
-                match ev {
-                    Event::PartStart => events.push(OEvent::PartStart),
-                    Event::Header { name, value } => {
-                        events.push(OEvent::Header(name.to_vec(), value.to_vec()))
-                    }
-                    Event::HeadersEnd => events.push(OEvent::HeadersEnd),
-                    Event::PartEnd => events.push(OEvent::PartEnd),
-                    Event::Finished => {
-                        events.push(OEvent::Finished);
-                        return Ok((events, None));
-                    }
-                    Event::Data(_) => unreachable!(),
-                }
+            Ok(Event::Finished) => {
+                col.push(Event::Finished);
+                return Ok((col.events, None));
             }
+            Ok(ev) => col.push(ev),
             Err(ReadError::BufferTooSmall) => {
                 assert!(
                     BUF < min,
@@ -84,16 +66,8 @@ fn run<const BUF: usize>(
                 return Err(());
             }
             Err(ReadError::Parse(e)) => {
-                flush(&mut pending, &mut events);
-                let oe = match e {
-                    Error::Boundary => OError::Boundary,
-                    Error::HeaderTooLong => OError::HeaderTooLong,
-                    Error::TooManyHeaders => OError::TooManyHeaders,
-                    Error::Header => OError::Header,
-                    Error::UnexpectedEof => OError::UnexpectedEof,
-                    _ => panic!("unexpected {e:?}"),
-                };
-                return Ok((events, Some(oe)));
+                col.finish();
+                return Ok((col.events, Some(oerr(e))));
             }
             Err(ReadError::Io(never)) => match never {},
         }

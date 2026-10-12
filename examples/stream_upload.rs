@@ -38,16 +38,17 @@ struct UploadSource {
     remaining: u64,
 }
 
+const PART: Part<'static> = Part {
+    name: b"firmware",
+    filename: Some(b"app.bin"),
+    content_type: Some(b"application/octet-stream"),
+};
+
 impl UploadSource {
     fn new() -> Self {
         let mut enc = Encoder::new(BOUNDARY).unwrap();
         let mut header = vec![0u8; 256];
-        let part = Part {
-            name: b"firmware",
-            filename: Some(b"app.bin"),
-            content_type: Some(b"application/octet-stream"),
-        };
-        let (n, done) = enc.write_part_header(&part, &mut header).unwrap();
+        let (n, done) = enc.write_part_header(&PART, &mut header).unwrap();
         assert!(done);
         header.truncate(n);
         UploadSource {
@@ -98,14 +99,9 @@ impl Read for UploadSource {
 
 fn main() {
     let mut source = UploadSource::new();
-    let expected_len = Encoder::new(BOUNDARY).unwrap().content_length(&[(
-        Part {
-            name: b"firmware",
-            filename: Some(b"app.bin"),
-            content_type: Some(b"application/octet-stream"),
-        },
-        FILE_LEN,
-    )]);
+    let expected_len = Encoder::new(BOUNDARY)
+        .unwrap()
+        .content_length(&[(PART, FILE_LEN)]);
 
     // --- the receiving side: everything below lives on the stack -------------
     let mut parser: Parser<'_, 256, 8> = Parser::new(BOUNDARY).unwrap();

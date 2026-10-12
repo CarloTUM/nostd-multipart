@@ -194,20 +194,3 @@ pub fn parse(
         ev.push(OEvent::PartStart);
     }
 }
-
-#[test]
-fn oracle_smoke() {
-    let (ev, err) = parse(b"b", b"--b\r\nA: 1\r\n\r\nxy\r\n--b--", 64, 4);
-    assert_eq!(err, None);
-    assert_eq!(
-        ev,
-        vec![
-            OEvent::PartStart,
-            OEvent::Header(b"A".to_vec(), b"1".to_vec()),
-            OEvent::HeadersEnd,
-            OEvent::Data(b"xy".to_vec()),
-            OEvent::PartEnd,
-            OEvent::Finished
-        ]
-    );
-}

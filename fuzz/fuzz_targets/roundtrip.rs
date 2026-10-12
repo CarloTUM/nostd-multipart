@@ -4,9 +4,14 @@
 //! or CRLF). `content_length` must match the produced body.
 #![no_main]
 
+#[path = "../../tests/common/mod.rs"]
+#[allow(dead_code)]
+mod common;
+
 use arbitrary::Arbitrary;
+use common::{make_safe, run_chunked, OEvent};
 use libfuzzer_sys::fuzz_target;
-use nostd_multipart::{content_disposition, Encoder, Event, Parser, Part};
+use nostd_multipart::{content_disposition, Encoder, Part};
 
 #[derive(Arbitrary, Debug)]
 struct FPart<'a> {
@@ -27,25 +32,6 @@ struct Input<'a> {
 fn lossy(v: &[u8]) -> bool {
     v.windows(3)
         .any(|w| matches!(w, b"%22" | b"%0D" | b"%0A" | b"%0d" | b"%0a"))
-}
-
-fn make_safe(boundary: &[u8], data: &[u8]) -> Vec<u8> {
-    let d = [b"\r\n--", boundary].concat();
-    let mut out = Vec::with_capacity(data.len() + 8);
-    let mut i = 0;
-    while i < data.len() {
-        if data[i..].starts_with(&d) {
-            out.extend_from_slice(&d);
-            i += d.len();
-            if matches!(data.get(i), None | Some(b'-' | b' ' | b'\t' | b'\r')) {
-                out.push(b'x');
-            }
-        } else {
-            out.push(data[i]);
-            i += 1;
-        }
-    }
-    out
 }
 
 fuzz_target!(|input: Input<'_>| {
@@ -126,41 +112,26 @@ fuzz_target!(|input: Input<'_>| {
     } else {
         input.chunk as usize
     };
-    let mut parser = Parser::<2048, 16>::new(input.boundary).unwrap();
+    let chunks: Vec<usize> = body.chunks(chunk).map(<[u8]>::len).collect();
+    let (events, err) = run_chunked::<2048, 16>(input.boundary, &body, &chunks);
+    assert_eq!(err, None);
     let mut got: Vec<(Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>, Vec<u8>)> = Vec::new();
-    let mut buf = Vec::new();
-    let mut pos = 0;
-    loop {
-        let eof = pos >= body.len();
-        let (used, ev) = parser.parse(&buf, eof).unwrap();
-        let had = ev.is_some();
-        let mut done = false;
+    for ev in events {
         match ev {
-            Some(Event::PartStart) => got.push((vec![], None, None, vec![])),
-            Some(Event::Header { name, value }) => {
+            OEvent::PartStart => got.push((vec![], None, None, vec![])),
+            OEvent::Header(name, value) => {
                 let cur = got.last_mut().unwrap();
                 if name.eq_ignore_ascii_case(b"content-disposition") {
-                    let cd = content_disposition(value).unwrap();
+                    let cd = content_disposition(&value).unwrap();
                     cur.0 = cd.name().unwrap().bytes().collect();
                     cur.1 = cd.filename().map(|f| f.bytes().collect());
                 } else {
                     assert!(name.eq_ignore_ascii_case(b"content-type"));
-                    cur.2 = Some(value.to_vec());
+                    cur.2 = Some(value);
                 }
             }
-            Some(Event::Data(d)) => got.last_mut().unwrap().3.extend_from_slice(d),
-            Some(Event::Finished) => done = true,
+            OEvent::Data(d) => got.last_mut().unwrap().3 = d,
             _ => {}
-        }
-        buf.drain(..used);
-        if done {
-            break;
-        }
-        if used == 0 && !had {
-            assert!(!eof);
-            let n = chunk.min(body.len() - pos);
-            buf.extend_from_slice(&body[pos..pos + n]);
-            pos += n;
         }
     }
     assert_eq!(got.len(), kept.len());
