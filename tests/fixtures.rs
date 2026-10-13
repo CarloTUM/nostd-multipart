@@ -1,6 +1,7 @@
 //! Real-client fixtures captured by `tests/fixtures/capture/capture.sh` from
-//! curl -F, Python `requests` and Node's `FormData` (undici) through a local HTTP
-//! server. Each fixture is parsed from its captured Content-Type and the exact
+//! curl -F, Python `requests` and Node's `FormData` (undici), and by
+//! `tests/fixtures/capture/browsers.sh` from a plain HTML form submitted by
+//! headless Chrome and Firefox, through a local HTTP server. Each fixture is parsed from its captured Content-Type and the exact
 //! event stream is asserted. Bodies are also checked for chunking invariance
 //! against the oracle.
 
@@ -74,6 +75,12 @@ fn notes() -> Vec<OEvent> {
     )
 }
 
+/// The empty `<input type="file">` a browser submits when nothing was picked.
+fn nofile() -> Vec<OEvent> {
+    let ct = Some("application/octet-stream");
+    part("name=\"nofile\"; filename=\"\"", ct, b"")
+}
+
 /// Parses fixture `name` and asserts the events are `parts` then `Finished`.
 fn check(name: &str, parts: &[Vec<OEvent>]) {
     let mut expected = parts.concat();
@@ -126,6 +133,20 @@ fn decoded_dispositions() {
         ]
     );
     assert_eq!(got("node_fields"), vec![(n("a"), None), (n("b"), None)]);
+    for browser in ["chrome", "firefox"] {
+        assert_eq!(
+            got(browser),
+            vec![
+                (n("field"), None),
+                (n("empty"), None),
+                (n("multi"), None),
+                (n("firmware"), Some(n("upload.bin"))),
+                (n("notes"), Some(n("nötes \"q\".txt"))),
+                (n("nofile"), Some(n("")))
+            ],
+            "{browser}"
+        );
+    }
 }
 
 #[test]
@@ -166,4 +187,24 @@ fn node_fields_only() {
         part("name=\"b\"", None, b"2"),
     );
     check("node_fields", &[a, b]);
+}
+
+/// A native `<form enctype="multipart/form-data">` submission: textarea LF is
+/// sent as CRLF, an empty file input still produces a part.
+fn html_form() -> [Vec<OEvent>; 6] {
+    [field(), empty(), multi(), firmware(), notes(), nofile()]
+}
+
+#[test]
+fn chrome_form() {
+    let (_, body) = fixture("chrome");
+    assert!(body.starts_with(b"------WebKitFormBoundary"));
+    check("chrome", &html_form());
+}
+
+#[test]
+fn firefox_form() {
+    let (_, body) = fixture("firefox");
+    assert!(body.starts_with(b"------geckoformboundary"));
+    check("firefox", &html_form());
 }

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Captures raw multipart bodies: POST /<name> stores <name>.body and <name>.ct."""
+"""Captures raw multipart bodies: POST /<name> stores <name>.body and <name>.ct.
+
+GET serves form.html (used by browsers.sh)."""
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -23,6 +25,14 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"ok")
         count += 1
+
+    def do_GET(self):
+        page = (Path(__file__).parent / "form.html").read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(page)))
+        self.end_headers()
+        self.wfile.write(page)
 
     def log_message(self, *a):
         pass

@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Opened by browsers.sh in a headless browser. Fills a plain HTML form (file
+     inputs via DataTransfer) and submits it natively with form.submit(), so the
+     body is produced by the browser's own multipart/form-data encoder, not by
+     fetch/FormData. The action is /<name> from the query string. -->
+<form id="f" method="post" enctype="multipart/form-data">
+  <input name="field" value="plain text">
+  <input name="empty" value="">
+  <textarea name="multi"></textarea>
+  <input type="file" name="firmware">
+  <input type="file" name="notes">
+  <input type="file" name="nofile">
+</form>
+<script>
+const f = document.getElementById("f");
+f.action = "/" + new URLSearchParams(location.search).get("name");
+// LF only: the browser must normalize textarea line breaks to CRLF.
+f.elements.multi.value = "a\nb";
+const bin = new TextEncoder().encode("hello\r\nworld\r\n--\r\n--not-a-boundary\r\n");
+const tail = new Uint8Array([0x00, 0x01, 0xff, ...new TextEncoder().encode(" binary")]);
+function put(input, parts, name, type) {
+  const dt = new DataTransfer();
+  dt.items.add(new File(parts, name, { type }));
+  input.files = dt.files;
+}
+put(f.elements.firmware, [bin, tail], "upload.bin", "application/octet-stream");
+put(f.elements.notes, ["line1\nline2\n"], 'nötes "q".txt', "text/plain");
+f.submit();
+</script>

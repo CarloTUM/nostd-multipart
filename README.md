@@ -205,8 +205,9 @@ surprises, so every check below is independent of the others:
   adversarial names and data (`tests/encoder.rs`).
 - **Differential testing** against [`multer`](https://crates.io/crates/multer)
   (`tests/proptests.rs`).
-- **Real clients.** Captured bodies from curl, Python `requests` and Node
-  `FormData`, plus the RFC examples (`tests/fixtures/`, `tests/vectors.rs`).
+- **Real clients.** Captured bodies from a plain HTML form submitted by
+  Chrome and Firefox, from curl, Python `requests` and Node `FormData`, plus
+  the RFC examples (`tests/fixtures/`, `tests/vectors.rs`).
 - **Fuzzing.** There are 4 libFuzzer targets in `fuzz/`. Before 0.1.0 each ran
   for 10 minutes (2–30 M executions) and found nothing.
 - **100 % line coverage** of `src/`, enforced in CI. Every `Error` variant is
@@ -241,6 +242,8 @@ The harnesses come in two sets:
 
 To regenerate the real-client fixtures, run `tests/fixtures/capture/capture.sh`.
 It needs curl, python3 with `requests`, and node ≥ 18.
+`tests/fixtures/capture/browsers.sh` captures the HTML form
+(`form.html`) from headless Chrome and Firefox.
 
 ## Minimum supported Rust version
 
