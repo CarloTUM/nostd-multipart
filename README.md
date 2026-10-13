@@ -89,6 +89,17 @@ you. You construct it with `MultipartReader::<_, 1024, 256, 8>::new(socket, pars
 and then call `next_event()`; see `examples/thumbv7em-mock-flash`.
 `embedded-io-async` gives you `MultipartReaderAsync` in the same way.
 
+### Trying it without a board
+
+```sh
+cargo run --release --features std --example form_server
+```
+
+This serves a plain HTML upload form on <http://127.0.0.1:8080> and streams
+every submission through the loop above (256-byte parser, 1 KiB buffer),
+printing each part's size and CRC-32. Upload something large to see that
+memory stays flat.
+
 ### Sending a form
 
 ```rust

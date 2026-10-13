@@ -47,3 +47,7 @@ all-features = true
 [[example]]
 name = "stream_upload"
 required-features = ["std"]
+
+[[example]]
+name = "form_server"
+required-features = ["std"]
