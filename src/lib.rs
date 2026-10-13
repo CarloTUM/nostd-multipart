@@ -68,4 +68,4 @@ pub use io::MultipartReader;
 #[cfg(feature = "embedded-io-async")]
 pub use io::MultipartReaderAsync;
 #[cfg(any(feature = "embedded-io", feature = "embedded-io-async"))]
-pub use io::ReadError;
+pub use io::{ReadError, WriteError};

@@ -1,11 +1,11 @@
 //! Adapters that pull bytes from an `embedded-io` / `embedded-io-async` reader
-//! into a fixed buffer and drive the [`Parser`]. Enabled by the features of the
-//! same names.
+//! into a fixed buffer and drive the [`Parser`], and that push [`Encoder`] output
+//! into a writer. Enabled by the features of the same names.
 
 use core::fmt;
 
 use crate::parser::Ev;
-use crate::{Error, Event, Parser};
+use crate::{Encoder, Error, Event, Parser, Part};
 
 /// Error of the reader adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +36,86 @@ impl<E: fmt::Debug> fmt::Display for ReadError<E> {
 }
 
 impl<E: fmt::Debug> core::error::Error for ReadError<E> {}
+
+/// Error of the encoder's writer methods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteError<E> {
+    /// The underlying writer failed. The body written so far is incomplete;
+    /// start a new request with a new [`Encoder`].
+    Io(E),
+    /// The part cannot be encoded (see [`Encoder::write_part_header`]). Nothing
+    /// has been written.
+    Encode(Error),
+}
+
+impl<E: fmt::Debug> fmt::Display for WriteError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WriteError::Io(e) => write!(f, "write error: {e:?}"),
+            WriteError::Encode(e) => write!(f, "multipart error: {e}"),
+        }
+    }
+}
+
+impl<E: fmt::Debug> core::error::Error for WriteError<E> {}
+
+/// Stack chunk the writer methods encode into before each `write_all`.
+const WRITE_CHUNK: usize = 64;
+
+/// Defines `Encoder` methods that write to `$write` (blocking or async).
+macro_rules! writer {
+    ($header:ident, $close:ident, $write:path $(, $async:ident $await:ident)?) => {
+        impl Encoder<'_> {
+            /// Writes the complete prefix of `part` to `w` (see
+            /// [`Self::write_part_header`]). Write the part's data to `w`
+            /// yourself afterwards. Uses a 64-byte stack buffer.
+            ///
+            /// # Errors
+            /// See [`WriteError`].
+            pub $($async)? fn $header<W: $write>(
+                &mut self,
+                part: &Part<'_>,
+                w: &mut W,
+            ) -> Result<(), WriteError<W::Error>> {
+                let mut chunk = [0u8; WRITE_CHUNK];
+                loop {
+                    let (n, done) = self.write_part_header(part, &mut chunk).map_err(WriteError::Encode)?;
+                    w.write_all(chunk.get(..n).unwrap_or(&[]))$(.$await)?.map_err(WriteError::Io)?;
+                    if done {
+                        return Ok(());
+                    }
+                }
+            }
+
+            /// Writes the complete close delimiter to `w` (see [`Self::write_close`])
+            /// and flushes it.
+            ///
+            /// # Errors
+            /// The writer's error.
+            pub $($async)? fn $close<W: $write>(&mut self, w: &mut W) -> Result<(), W::Error> {
+                let mut chunk = [0u8; WRITE_CHUNK];
+                loop {
+                    let (n, done) = self.write_close(&mut chunk);
+                    w.write_all(chunk.get(..n).unwrap_or(&[]))$(.$await)??;
+                    if done {
+                        return w.flush()$(.$await)?;
+                    }
+                }
+            }
+        }
+    };
+}
+
+#[cfg(feature = "embedded-io")]
+writer!(write_part_header_to, write_close_to, embedded_io::Write);
+
+#[cfg(feature = "embedded-io-async")]
+writer!(
+    write_part_header_to_async,
+    write_close_to_async,
+    embedded_io_async::Write,
+    async await
+);
 
 /// Reader-independent part of the adapters.
 struct Core<'b, const BUF: usize, const LINE: usize, const MAX_HEADERS: usize> {

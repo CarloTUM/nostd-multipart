@@ -125,6 +125,11 @@ loop {
 }
 ```
 
+With the `embedded-io` feature you can skip the loops:
+`enc.write_part_header_to(&part, &mut socket)?`, then write the file bytes,
+then `enc.write_close_to(&mut socket)?` (async: the `_async` variants). They
+encode through a 64-byte stack buffer.
+
 `Encoder::content_length` computes the exact body size for the
 `Content-Length` header up front. `boundary_from_random` turns a few RNG bytes
 into a valid boundary. Field names and file names are escaped the way browsers
@@ -135,8 +140,8 @@ escape them (`"` → `%22`, CR → `%0D`, LF → `%0A`). The encoder also escape
 
 | feature             | what it adds                                        |
 |---------------------|-----------------------------------------------------|
-| `embedded-io`       | blocking `MultipartReader` over an `embedded_io::Read` |
-| `embedded-io-async` | `MultipartReaderAsync` over an `embedded_io_async::Read` |
+| `embedded-io`       | blocking `MultipartReader` over an `embedded_io::Read`; `Encoder::write_part_header_to` / `write_close_to` for an `embedded_io::Write` |
+| `embedded-io-async` | `MultipartReaderAsync` over an `embedded_io_async::Read`; `Encoder::write_part_header_to_async` / `write_close_to_async` |
 
 None are enabled by default. (`std` exists only to build the host example;
 `Error` implements `core::error::Error` regardless.)

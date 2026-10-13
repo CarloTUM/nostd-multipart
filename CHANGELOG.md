@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `Encoder::write_part_header_to` / `write_close_to` (feature `embedded-io`)
+  and `write_part_header_to_async` / `write_close_to_async` (feature
+  `embedded-io-async`) write straight into a writer; new `WriteError`.
+- Example `form_server`: try the parser from a browser without hardware.
+- Test fixtures from native HTML form submissions in Chrome and Firefox.
+
 ## 0.1.1 — 2026-10-12
 
 - `Parser::from_content_type` now rejects trailing garbage after a quoted

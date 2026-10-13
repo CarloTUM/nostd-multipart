@@ -1,7 +1,7 @@
 //! embedded-io / embedded-io-async adapters (feature-gated).
 #![cfg(any(feature = "embedded-io", feature = "embedded-io-async"))]
 
-use nostd_multipart::{Error, Event, Parser, ReadError};
+use nostd_multipart::{Encoder, Error, Event, Parser, Part, ReadError, WriteError};
 
 const BODY: &[u8] = b"--b\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nhello\r\nworld\r\n--b\r\n\r\n\r\n--b--";
 
@@ -313,6 +313,210 @@ mod asynch {
                 }
             }
             assert_eq!(err, Some(ReadError::BufferTooSmall));
+        });
+    }
+}
+
+/// Writer accepting at most `max` bytes per write, failing once `writes_left` is 0.
+struct Sink {
+    out: Vec<u8>,
+    max: usize,
+    writes_left: Option<usize>,
+    flushed: bool,
+}
+
+impl Sink {
+    fn new(max: usize, writes_left: Option<usize>) -> Self {
+        Sink {
+            out: Vec::new(),
+            max,
+            writes_left,
+            flushed: false,
+        }
+    }
+
+    fn put(&mut self, buf: &[u8]) -> Result<usize, Boom> {
+        if let Some(n) = &mut self.writes_left {
+            if *n == 0 {
+                return Err(Boom);
+            }
+            *n -= 1;
+        }
+        let n = self.max.min(buf.len());
+        self.out.extend_from_slice(&buf[..n]);
+        self.flushed = false;
+        Ok(n)
+    }
+}
+
+/// Two parts, the second with a header longer than the writers' 64-byte chunk.
+const PARTS: [Part<'static>; 2] = [
+    Part {
+        name: b"version",
+        filename: None,
+        content_type: None,
+    },
+    Part {
+        name: b"firmware",
+        filename: Some(b"a-file-name-that-is-long-enough-to-need-two-chunks.bin"),
+        content_type: Some(b"application/octet-stream"),
+    },
+];
+const DATA: [&[u8]; 2] = [b"1.2.3", b"\x7fELF\r\n--bnd\r\n"];
+
+/// The same body produced by the slice-based API in one go.
+fn reference_body() -> Vec<u8> {
+    let mut enc = Encoder::new(b"bnd").unwrap();
+    let mut body = Vec::new();
+    let mut out = [0u8; 512];
+    for (part, data) in PARTS.iter().zip(DATA) {
+        let (n, done) = enc.write_part_header(part, &mut out).unwrap();
+        assert!(done);
+        body.extend_from_slice(&out[..n]);
+        body.extend_from_slice(data);
+    }
+    let (n, done) = enc.write_close(&mut out);
+    assert!(done);
+    body.extend_from_slice(&out[..n]);
+    body
+}
+
+const BAD_PART: Part<'static> = Part {
+    name: b"f",
+    filename: None,
+    content_type: Some(b"text/plain\r\nX-Injected: 1"),
+};
+
+#[test]
+fn write_error_traits() {
+    use std::error::Error as _;
+    let e: WriteError<Boom> = WriteError::Io(Boom);
+    assert!(format!("{e}").contains("write error"));
+    assert!(format!("{}", WriteError::<Boom>::Encode(Error::Header)).contains("multipart error"));
+    assert!(e.source().is_none());
+    let _c = e;
+}
+
+#[cfg(feature = "embedded-io")]
+mod blocking_write {
+    use super::*;
+
+    impl embedded_io::ErrorType for Sink {
+        type Error = Boom;
+    }
+    impl embedded_io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> Result<usize, Boom> {
+            self.put(buf)
+        }
+        fn flush(&mut self) -> Result<(), Boom> {
+            self.flushed = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn matches_slice_api_for_all_write_sizes() {
+        let expected = reference_body();
+        for max in 1..=80 {
+            let mut enc = Encoder::new(b"bnd").unwrap();
+            let mut w = Sink::new(max, None);
+            for (part, data) in PARTS.iter().zip(DATA) {
+                enc.write_part_header_to(part, &mut w).unwrap();
+                embedded_io::Write::write_all(&mut w, data).unwrap();
+            }
+            enc.write_close_to(&mut w).unwrap();
+            assert!(w.flushed);
+            assert_eq!(w.out, expected, "max {max}");
+        }
+    }
+
+    #[test]
+    fn errors() {
+        let mut enc = Encoder::new(b"bnd").unwrap();
+        let mut w = Sink::new(100, None);
+        assert_eq!(
+            enc.write_part_header_to(&BAD_PART, &mut w),
+            Err(WriteError::Encode(Error::Header))
+        );
+        assert!(w.out.is_empty());
+        let mut w = Sink::new(10, Some(1));
+        assert_eq!(
+            enc.write_part_header_to(&PARTS[0], &mut w),
+            Err(WriteError::Io(Boom))
+        );
+        let mut enc = Encoder::new(b"bnd").unwrap();
+        assert_eq!(enc.write_close_to(&mut Sink::new(1, Some(0))), Err(Boom));
+    }
+
+    #[test]
+    fn close_longer_than_one_chunk() {
+        let boundary = [b'x'; 70];
+        let mut enc = Encoder::new(&boundary).unwrap();
+        let mut w = Sink::new(100, None);
+        enc.write_close_to(&mut w).unwrap();
+        assert_eq!(w.out, [&b"\r\n--"[..], &boundary, b"--\r\n"].concat());
+    }
+}
+
+#[cfg(feature = "embedded-io-async")]
+mod async_write {
+    use super::*;
+
+    struct AsyncSink(Sink);
+
+    impl embedded_io_async::ErrorType for AsyncSink {
+        type Error = Boom;
+    }
+    impl embedded_io_async::Write for AsyncSink {
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, Boom> {
+            futures::future::ready(()).await;
+            self.0.put(buf)
+        }
+        async fn flush(&mut self) -> Result<(), Boom> {
+            self.0.flushed = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn matches_slice_api_and_errors() {
+        futures::executor::block_on(async {
+            let expected = reference_body();
+            for max in [1, 7, 64, 500] {
+                let mut enc = Encoder::new(b"bnd").unwrap();
+                let mut w = AsyncSink(Sink::new(max, None));
+                for (part, data) in PARTS.iter().zip(DATA) {
+                    enc.write_part_header_to_async(part, &mut w).await.unwrap();
+                    embedded_io_async::Write::write_all(&mut w, data)
+                        .await
+                        .unwrap();
+                }
+                enc.write_close_to_async(&mut w).await.unwrap();
+                assert!(w.0.flushed);
+                assert_eq!(w.0.out, expected, "max {max}");
+            }
+            let mut enc = Encoder::new(b"bnd").unwrap();
+            let mut w = AsyncSink(Sink::new(100, None));
+            assert_eq!(
+                enc.write_part_header_to_async(&BAD_PART, &mut w).await,
+                Err(WriteError::Encode(Error::Header))
+            );
+            let mut w = AsyncSink(Sink::new(10, Some(1)));
+            assert_eq!(
+                enc.write_part_header_to_async(&PARTS[0], &mut w).await,
+                Err(WriteError::Io(Boom))
+            );
+            let mut w = AsyncSink(Sink::new(1, Some(0)));
+            assert_eq!(enc.write_close_to_async(&mut w).await, Err(Boom));
+            // A close delimiter longer than one 64-byte chunk.
+            let boundary = [b'x'; 70];
+            let mut w = AsyncSink(Sink::new(100, None));
+            Encoder::new(&boundary)
+                .unwrap()
+                .write_close_to_async(&mut w)
+                .await
+                .unwrap();
+            assert_eq!(w.0.out, [&b"\r\n--"[..], &boundary, b"--\r\n"].concat());
         });
     }
 }
