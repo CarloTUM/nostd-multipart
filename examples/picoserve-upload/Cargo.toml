@@ -1,0 +1,12 @@
+[package]
+name = "picoserve-upload"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+nostd-multipart = { path = "../..", features = ["embedded-io-async"] }
+picoserve = { version = "0.20", features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "io-util", "net", "time", "macros"] }
+
+[workspace]

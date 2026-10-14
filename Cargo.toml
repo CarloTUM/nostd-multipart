@@ -8,7 +8,7 @@ description = "Heap-free, panic-free, streaming multipart/form-data parser and e
 repository = "https://github.com/CarloTUM/nostd-multipart"
 documentation = "https://docs.rs/nostd-multipart"
 readme = "README.md"
-exclude = ["fuzz/corpus", "fuzz/artifacts", "fuzz/target", "examples/thumbv7em-mock-flash/target", ".github"]
+exclude = ["fuzz/corpus", "fuzz/artifacts", "fuzz/target", "examples/thumbv7em-mock-flash/target", "examples/picoserve-upload/target", ".github"]
 keywords = ["multipart", "form-data", "no_std", "embedded", "streaming"]
 categories = ["no-std", "no-std::no-alloc", "parser-implementations", "embedded"]
 

@@ -6,6 +6,8 @@
   and `write_part_header_to_async` / `write_close_to_async` (feature
   `embedded-io-async`) write straight into a writer; new `WriteError`.
 - Example `form_server`: try the parser from a browser without hardware.
+- Example `picoserve-upload`: HTML form upload streamed into a flash sink
+  through `MultipartReaderAsync` inside a picoserve handler.
 - Test fixtures from native HTML form submissions in Chrome and Firefox.
 
 ## 0.1.1 — 2026-10-12

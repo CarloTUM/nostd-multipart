@@ -88,6 +88,9 @@ If you enable the `embedded-io` feature, `MultipartReader` runs this loop for
 you. You construct it with `MultipartReader::<_, 1024, 256, 8>::new(socket, parser)`
 and then call `next_event()`; see `examples/thumbv7em-mock-flash`.
 `embedded-io-async` gives you `MultipartReaderAsync` in the same way.
+With [picoserve](https://crates.io/crates/picoserve), pass the request body
+reader to it; `examples/picoserve-upload` is a complete upload handler
+(`cd examples/picoserve-upload && cargo run --release`).
 
 ### Trying it without a board
 

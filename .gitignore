@@ -3,6 +3,7 @@ fuzz/target/
 fuzz/corpus/
 fuzz/artifacts/
 examples/thumbv7em-mock-flash/target/
+examples/picoserve-upload/target/
 
 # cargo llvm-cov output
 lcov.info
