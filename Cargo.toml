@@ -31,7 +31,7 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 
 [workspace]
 members = ["."]
-exclude = ["fuzz", "examples/thumbv7em-mock-flash"]
+exclude = ["fuzz", "examples/thumbv7em-mock-flash", "examples/picoserve-upload"]
 
 [profile.test]
 opt-level = 2

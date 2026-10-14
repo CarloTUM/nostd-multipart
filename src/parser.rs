@@ -108,7 +108,9 @@ impl<'b, const LINE: usize, const MAX_HEADERS: usize> Parser<'b, LINE, MAX_HEADE
         self.boundary.len().saturating_add(LOOKAHEAD_EXTRA)
     }
 
-    /// `true` once `Finished` has been returned.
+    /// `true` once the close delimiter has been consumed. That is already the
+    /// case when the last part's `PartEnd` is returned, one call before the
+    /// trailing `Finished` event.
     #[must_use]
     pub const fn is_finished(&self) -> bool {
         matches!(self.state, State::Finished)

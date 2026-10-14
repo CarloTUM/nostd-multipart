@@ -114,8 +114,10 @@ OWS         = *( SP / HTAB )
 Checks, in this order, for every line:
 
 1. If the bytes of the line *including* its CRLF exceed `LINE` =>
-   `Error::HeaderTooLong`. This is detected as soon as `LINE` bytes have been
-   accumulated without a LF, i.e. possibly before the line ends.
+   `Error::HeaderTooLong`. This is detected as soon as more than `LINE` bytes
+   have been accumulated without a LF, i.e. possibly before the line ends.
+   Exactly `LINE` bytes without a LF are stored; if the input then ends
+   (`eof`), the error is `UnexpectedEof`, not `HeaderTooLong`.
 2. The line must end in CRLF. A LF not preceded by CR (bare LF) => `Error::Header`.
 3. A line whose content (without CRLF) is empty => `HeadersEnd`; the body starts
    with the next byte.
