@@ -108,15 +108,11 @@ impl RequestHandlerService<()> for Upload {
         mut request: Request<'_, R>,
         response_writer: W,
     ) -> Result<ResponseSent, W::Error> {
-        // The parser borrows the boundary, so copy the header out of the request.
-        let mut content_type = [0u8; 128];
-        let ct_len = match request.parts.headers().get("content-type") {
-            Some(v) if v.as_raw().len() <= content_type.len() => {
-                content_type[..v.as_raw().len()].copy_from_slice(v.as_raw());
-                v.as_raw().len()
-            }
-            _ => 0,
-        };
+        let content_type = request
+            .parts
+            .headers()
+            .get("content-type")
+            .map_or(&b""[..], |v| v.as_raw());
 
         let mut flash = FlashSink::new();
         let reader = request
@@ -126,7 +122,7 @@ impl RequestHandlerService<()> for Upload {
             // Large images take longer than the default read timeout. On embassy use
             // `.with_different_timeout(..)` instead.
             .with_different_timeout_signal(Box::pin(tokio::time::sleep(Duration::from_secs(60))));
-        let result = receive(&content_type[..ct_len], reader, &mut flash).await;
+        let result = receive(content_type, reader, &mut flash).await;
         let connection = request.body_connection.finalize().await?;
 
         match result {
