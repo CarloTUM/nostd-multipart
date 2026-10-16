@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Part-level API on `MultipartReader` / `MultipartReaderAsync`: `next_part()`
+  returns a `PartInfo` with the part's `name()` / `filename()`, `next_chunk()`
+  yields the body zero-copy, and the readers implement `embedded_io::Read` /
+  `embedded_io_async::Read` for the current part's body (so `read_exact` works on
+  a field); `read_body(&mut [u8; N])` copies a small field in one call. `ReadError` implements `embedded_io::Error`. No more hand-written
+  `in_firmware` state machine; see DESIGN.md §14.
 - `Encoder::write_part_header_to` / `write_close_to` (feature `embedded-io`)
   and `write_part_header_to_async` / `write_close_to_async` (feature
   `embedded-io-async`) write straight into a writer; new `WriteError`.

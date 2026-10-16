@@ -84,13 +84,43 @@ Each part produces `PartStart`, any number of `Header { name, value }`,
 after the closing boundary. A `Data` event is never empty, and joining all
 `Data` slices of a part gives you exactly that part's body.
 
-If you enable the `embedded-io` feature, `MultipartReader` runs this loop for
-you. You construct it with `MultipartReader::<_, 1024, 256, 8>::new(socket, parser)`
-and then call `next_event()`; see `examples/thumbv7em-mock-flash`.
-`embedded-io-async` gives you `MultipartReaderAsync` in the same way.
-With [picoserve](https://crates.io/crates/picoserve), pass the request body
-reader to it; `examples/picoserve-upload` is a complete upload handler
-(`cd examples/picoserve-upload && cargo run --release`).
+### With `embedded-io`
+
+If your body comes from an `embedded_io::Read` (a socket, a request body),
+enable the `embedded-io` feature and let `MultipartReader` do the buffering.
+It adds a part-level API on top of the events:
+
+```rust
+use nostd_multipart::{MultipartReader, Parser};
+
+let parser: Parser<'_, 256, 8> = Parser::from_content_type(content_type)?;
+let mut reader = MultipartReader::<_, 1024, 256, 8>::new(socket, parser);
+let mut version = [0u8; 32];
+while let Some(part) = reader.next_part()? {
+    if part.name().is_some_and(|n| n == "version") {
+        // Small text field: copy it out. `None` means it did not fit.
+        let n = reader.read_body(&mut version)?.ok_or(TooLong)?;
+        log(&version[..n]);
+    } else if part.name().is_some_and(|n| n == "firmware") {
+        // File: stream it, zero-copy. Slices live in the 1 KiB buffer.
+        while let Some(chunk) = reader.next_chunk()? {
+            flash(chunk);
+        }
+    }
+    // Parts you don't read are skipped by the next `next_part()`.
+}
+```
+
+`next_part` returns a `PartInfo` with the part's `name()`, `filename()` and
+the raw `Content-Disposition`; the reader also implements `embedded_io::Read`
+for the current part's body, so `read_exact` works on a field. `next_event()`
+gives you the raw events (and the other headers) whenever you need them, and
+the two styles can be mixed. See `examples/thumbv7em-mock-flash`.
+
+`embedded-io-async` gives you `MultipartReaderAsync` with the same methods,
+`.await`ed. With [picoserve](https://crates.io/crates/picoserve), pass the
+request body reader to it; `examples/picoserve-upload` is a complete upload
+handler (`cd examples/picoserve-upload && cargo run --release`).
 
 ### Trying it without a board
 
@@ -143,8 +173,8 @@ escape them (`"` → `%22`, CR → `%0D`, LF → `%0A`). The encoder also escape
 
 | feature             | what it adds                                        |
 |---------------------|-----------------------------------------------------|
-| `embedded-io`       | blocking `MultipartReader` over an `embedded_io::Read`; `Encoder::write_part_header_to` / `write_close_to` for an `embedded_io::Write` |
-| `embedded-io-async` | `MultipartReaderAsync` over an `embedded_io_async::Read`; `Encoder::write_part_header_to_async` / `write_close_to_async` |
+| `embedded-io`       | blocking `MultipartReader` over an `embedded_io::Read` (`next_part` / `next_chunk` / `read_body`, implements `Read` for the part body); `Encoder::write_part_header_to` / `write_close_to` for an `embedded_io::Write` |
+| `embedded-io-async` | `MultipartReaderAsync` over an `embedded_io_async::Read`, same methods; `Encoder::write_part_header_to_async` / `write_close_to_async` |
 
 None are enabled by default. (`std` exists only to build the host example;
 `Error` implements `core::error::Error` regardless.)
@@ -160,11 +190,13 @@ statics:
 | `Parser<'_, 256, 8>`                    | 296 B        | 276 B          |
 | `Parser<'_, 128, 4>`                    | 168 B        | 148 B          |
 | `Encoder<'_>`                           | 32 B         | 16 B           |
-| `MultipartReader<'_, R, 1024, 512, 16>` | 1656 B + `R` | ≈ 1580 B + `R` |
-| `MultipartReader<'_, R, 256, 128, 8>`   | 488 B + `R`  | ≈ 444 B + `R`  |
+| `MultipartReader<'_, R, 1024, 512, 16>` | 1648 B + `R` | 1592 B + `R`   |
+| `MultipartReader<'_, R, 256, 128, 8>`   | 496 B + `R`  | 440 B + `R`    |
+| `PartInfo<256>` (from `next_part`)      | 272 B        | 264 B          |
 
 A parser takes `LINE + 5 * size_of::<usize>()` bytes, and a test checks that
-this holds.
+this holds. `PartInfo<LINE>` holds a copy of the part's `Content-Disposition`
+value and takes `LINE + 2 * size_of::<usize>()` bytes on your stack.
 
 - **`LINE`** is the longest header line you accept, CRLF included. Browsers
   send `Content-Disposition` lines of about 60 bytes plus the file name. 256 is
@@ -175,8 +207,8 @@ this holds.
   the `Data` events bigger. It never changes the result.
 
 In numbers: `examples/stream_upload.rs` streams a 50 MiB upload through a
-1 KiB buffer at about 300 MiB/s. The `thumbv7em-mock-flash` example builds
-to a 7.2 KiB Cortex-M4F binary.
+1 KiB buffer at about 300 MiB/s. The `thumbv7em-mock-flash` example, which
+uses the part-level API, builds to a 6.8 KiB Cortex-M4F binary.
 
 ## What it guarantees
 
@@ -227,8 +259,10 @@ surprises, so every check below is independent of the others:
 - **Real clients.** Captured bodies from a plain HTML form submitted by
   Chrome and Firefox, from curl, Python `requests` and Node `FormData`, plus
   the RFC examples (`tests/fixtures/`, `tests/vectors.rs`).
-- **Fuzzing.** There are 4 libFuzzer targets in `fuzz/`. Before 0.1.0 each ran
-  for 10 minutes (2–30 M executions) and found nothing.
+- **Fuzzing.** There are 5 libFuzzer targets in `fuzz/` (parser under arbitrary
+  chunking, encoder round trip, header helpers, the reader adapter's events and
+  its part-level API). Before 0.1.0 each ran for 10 minutes (2–30 M executions)
+  and found nothing.
 - **100 % line coverage** of `src/`, enforced in CI. Every `Error` variant is
   produced by at least one test.
 - **Kani model checking.** See the next section.

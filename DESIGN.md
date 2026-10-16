@@ -330,5 +330,54 @@ part of WHATWG's documented lossiness and is accepted on the decoding side.
 
 Bare-LF leniency; nested `multipart/mixed` expansion (RFC 7578 §4.3 deprecated);
 charset conversion / `_charset_`; `Content-Transfer-Encoding` decoding; decoding
-`filename*`; storing headers (the application keeps what it needs from each
-`Header` event).
+`filename*`; storing headers in the parser (the application keeps what it needs
+from each `Header` event; the adapters' `PartInfo` keeps one value for
+convenience, §14).
+
+## 14. Reader adapters (`src/io.rs`, features `embedded-io` / `embedded-io-async`)
+
+`MultipartReader<R, BUF, LINE, MAX_HEADERS>` (and the `Async` twin) owns a
+`BUF`-byte buffer and a `Parser`, and drives the parser from an `embedded_io::Read`.
+Same semantics for both; the async version awaits the reader.
+
+* `next_event()` is the §9 loop: run the parser on the buffered bytes; when it
+  needs more, compact the buffer and read into the free space. A full buffer
+  without progress is `BufferTooSmall` (`BUF < min_buffer()`). A read of 0 bytes
+  sets `eof`. Errors: `Io(E)`, `Parse(Error)`, `BufferTooSmall`; `Parse` is
+  sticky like the parser, `Finished` is absorbing.
+
+On top of the events, three part-level operations. They are defined in terms of
+the event stream and may be mixed freely with `next_event`:
+
+* **`next_part() -> Option<PartInfo<LINE>>`** consumes events until `HeadersEnd`
+  (=> `Some`) or `Finished` (=> `None`, and every later call is `None`). While
+  doing so it skips `Data` and `PartEnd` of an unfinished part, and copies the
+  value of the *first* `Content-Disposition` header seen since the last
+  `PartStart` into `PartInfo` (the value is at most `LINE` bytes, so it always
+  fits). Headers already consumed by `next_event` before the call are not seen.
+  `PartInfo::disposition()` applies rule 8 lazily; a missing or malformed header
+  gives `None` for `disposition()`, `name()`, `filename()`.
+* **`next_chunk() -> Option<&[u8]>`**: *in a body* (after `HeadersEnd`, before
+  the part's `PartEnd`), the undelivered rest of the current `Data` event if any,
+  else the next event's `Data`; `None` when that event is `PartEnd`. *Outside a
+  body* `None` without reading. A returned slice is never empty.
+* **`read_body(out) -> Option<usize>`**: copies the body from the current
+  position until `PartEnd` (=> `Some(bytes copied)`) or until `out` is full while
+  the body continues (=> `None`; `out` is full, nothing is lost: the rest is still
+  readable). Outside a body `Some(0)`. The "continues" test peeks at the next
+  event without delivering it.
+* **`Read::read(buf)`**: `0` if `buf` is empty or outside a body; otherwise copies
+  the next bytes of the body as `next_chunk` would deliver them, at most
+  `buf.len()`, and returns `0` exactly at `PartEnd`. `ReadError` implements
+  `embedded_io::Error` (`Io` => inner kind, `Parse` => `InvalidData`,
+  `BufferTooSmall` => `OutOfMemory`).
+
+**No double delivery.** A `Data` event is delivered once, in order, whether it
+goes out whole through `next_event` or `next_chunk`, or in pieces through
+`read`. The adapter tracks how many bytes of the pending `Data` event have been
+handed out; `next_event` marks the whole event delivered. Hence, for a part,
+*concatenation of all bytes obtained from `next_event`'s `Data`, `next_chunk` and
+`read`, in call order* equals the part body (rule 6).
+
+`PartInfo<LINE>` is `LINE + 2 * size_of::<usize>()` bytes and lives on the
+caller's stack; the adapter itself grows by two words.

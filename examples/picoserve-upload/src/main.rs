@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use nostd_multipart::{content_disposition, Event, MultipartReaderAsync, Parser, ReadError};
+use nostd_multipart::{MultipartReaderAsync, Parser, ReadError};
 use picoserve::io::Read;
 use picoserve::request::Request;
 use picoserve::response::{IntoResponse, ResponseWriter, StatusCode};
@@ -74,27 +74,26 @@ async fn receive<R: Read>(
     let parser: Parser<'_, 256, 8> =
         Parser::from_content_type(content_type).map_err(|_| UploadError::NotMultipart)?;
     let mut reader = MultipartReaderAsync::<_, 1024, 256, 8>::new(body, parser);
-    let mut in_firmware = false;
     let mut found = false;
-    loop {
-        match reader.next_event().await? {
-            Event::PartStart => in_firmware = false,
-            Event::Header { name, value } if name.eq_ignore_ascii_case(b"content-disposition") => {
-                if let Ok(cd) = content_disposition(value) {
-                    in_firmware = cd.name().is_some_and(|n| n == "firmware");
-                    found |= in_firmware;
-                }
+    while let Some(part) = reader.next_part().await? {
+        if part.name().is_some_and(|n| n == "version") {
+            // A small text field: copy it out (`None` if longer than the buffer).
+            let mut version = [0u8; 32];
+            if let Some(n) = reader.read_body(&mut version).await? {
+                println!("version: {}", String::from_utf8_lossy(&version[..n]));
             }
-            Event::Data(d) if in_firmware => flash.write(d),
-            Event::Finished => {
-                return if found {
-                    Ok(())
-                } else {
-                    Err(UploadError::NoFirmware)
-                }
+        } else if part.name().is_some_and(|n| n == "firmware") {
+            // The file: streamed chunk by chunk, zero-copy from the 1 KiB buffer.
+            found = true;
+            while let Some(chunk) = reader.next_chunk().await? {
+                flash.write(chunk);
             }
-            _ => {}
         }
+    }
+    if found {
+        Ok(())
+    } else {
+        Err(UploadError::NoFirmware)
     }
 }
 

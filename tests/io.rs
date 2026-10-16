@@ -224,7 +224,7 @@ mod asynch {
     use super::*;
     use nostd_multipart::MultipartReaderAsync;
 
-    struct AsyncChunky<'a>(Chunky<'a>);
+    pub(super) struct AsyncChunky<'a>(pub(super) Chunky<'a>);
 
     impl embedded_io_async::ErrorType for AsyncChunky<'_> {
         type Error = Boom;
@@ -517,6 +517,451 @@ mod async_write {
                 .await
                 .unwrap();
             assert_eq!(w.0.out, [&b"\r\n--"[..], &boundary, b"--\r\n"].concat());
+        });
+    }
+}
+
+/// Four parts for the part-level API: a text field, a file with two
+/// `Content-Disposition` headers (the first wins), a part without any
+/// disposition and an empty body, and a part with a malformed disposition.
+const PARTS_BODY: &[u8] = b"--b\r\n\
+Content-Disposition: form-data; name=\"version\"\r\n\
+\r\n\
+1.2.3\r\n\
+--b\r\n\
+Content-Type: text/plain\r\n\
+Content-Disposition: form-data; name=\"firmware\"; filename=\"a.bin\"\r\n\
+Content-Disposition: form-data; name=\"dup\"\r\n\
+\r\n\
+hello\r\nworld\r\n\
+--b\r\n\
+X-Other: 1\r\n\
+\r\n\
+\r\n\
+--b\r\n\
+Content-Disposition: ;;; bad\r\n\
+\r\n\
+x\r\n\
+--b--";
+
+fn parts_parser() -> Parser<'static, 96, 4> {
+    Parser::new(b"b").unwrap()
+}
+
+#[cfg(feature = "embedded-io")]
+mod blocking_parts {
+    use super::*;
+    use embedded_io::{Error as _, ErrorKind, Read, ReadExactError};
+    use nostd_multipart::{MultipartReader, PartInfo};
+
+    fn reader<const BUF: usize>(
+        data: &[u8],
+        max: usize,
+        reads_left: Option<usize>,
+    ) -> MultipartReader<'static, Chunky<'_>, BUF, 96, 4> {
+        MultipartReader::new(
+            Chunky {
+                data,
+                max,
+                reads_left,
+            },
+            parts_parser(),
+        )
+    }
+
+    /// Walks all four parts, checking the headers and collecting the bodies with
+    /// `next_chunk` (part 1) and `Read::read` with a 3-byte buffer (part 2).
+    fn walk<const BUF: usize>(max: usize) -> Result<(), ReadError<Boom>> {
+        let mut r = reader::<BUF>(PARTS_BODY, max, None);
+
+        let p = r.next_part()?.unwrap();
+        assert_eq!(
+            p.disposition_raw(),
+            Some(&b"form-data; name=\"version\""[..])
+        );
+        assert_eq!(p.name().unwrap(), "version");
+        assert!(p.filename().is_none());
+        assert!(p.disposition().unwrap().is_form_data());
+        let mut body = Vec::new();
+        while let Some(chunk) = r.next_chunk()? {
+            assert!(!chunk.is_empty());
+            body.extend_from_slice(chunk);
+        }
+        assert_eq!(body, b"1.2.3");
+        assert_eq!(r.next_chunk()?, None, "stays None after the body");
+        assert_eq!(r.read(&mut [0; 4])?, 0, "read outside a body");
+        assert_eq!(
+            r.read_body(&mut [0; 4])?,
+            Some(0),
+            "read_body outside a body"
+        );
+
+        let p = r.next_part()?.unwrap();
+        assert_eq!(p.name().unwrap(), "firmware");
+        assert_eq!(p.filename().unwrap(), "a.bin");
+        let mut body = Vec::new();
+        let mut buf = [0u8; 3];
+        loop {
+            let n = r.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(body, b"hello\r\nworld");
+        assert_eq!(r.read(&mut buf)?, 0);
+
+        let p = r.next_part()?.unwrap();
+        assert_eq!(p.disposition_raw(), None);
+        assert!(p.disposition().is_none());
+        assert!(p.name().is_none() && p.filename().is_none());
+        assert_eq!(format!("{p:?}"), "PartInfo { disposition: None }");
+        assert_eq!(r.next_chunk()?, None, "empty body");
+
+        let p = r.next_part()?.unwrap();
+        assert_eq!(p.disposition_raw(), Some(&b";;; bad"[..]));
+        assert!(p.disposition().is_none(), "malformed value parses to None");
+        assert_eq!(p.clone(), p);
+        // Skipping the body by asking for the next part.
+        assert!(r.next_part()?.is_none());
+        assert!(r.next_part()?.is_none(), "stays None");
+        assert_eq!(r.next_chunk()?, None);
+        assert_eq!(r.read(&mut buf)?, 0);
+        assert!(r.parser().is_finished());
+        Ok(())
+    }
+
+    #[test]
+    fn all_read_sizes_and_buffers() {
+        for max in 1..=PARTS_BODY.len() {
+            walk::<16>(max).unwrap_or_else(|e| panic!("BUF 16, max {max}: {e}"));
+            walk::<96>(max).unwrap_or_else(|e| panic!("BUF 96, max {max}: {e}"));
+            walk::<1024>(max).unwrap_or_else(|e| panic!("BUF 1024, max {max}: {e}"));
+        }
+    }
+
+    #[test]
+    fn mixing_read_next_chunk_and_next_event() {
+        // Everything arrives in one read, so a part body is one `Data` event.
+        let mut r = reader::<1024>(PARTS_BODY, usize::MAX, None);
+        r.next_part().unwrap().unwrap();
+        // A `Data` event handed out by `next_event` is not delivered again.
+        assert_eq!(r.next_event(), Ok(Event::Data(b"1.2.3")));
+        assert_eq!(r.read(&mut [0; 8]), Ok(0));
+        assert_eq!(r.next_chunk(), Ok(None));
+
+        r.next_part().unwrap().unwrap();
+        assert_eq!(r.read(&mut []), Ok(0), "empty buffer reads nothing");
+        let mut two = [0u8; 2];
+        assert_eq!(r.read(&mut two), Ok(2));
+        assert_eq!(&two, b"he");
+        // `next_chunk` continues where `read` stopped ...
+        assert_eq!(r.next_chunk(), Ok(Some(&b"llo\r\nworld"[..])));
+        assert_eq!(r.next_chunk(), Ok(None));
+        // ... and `next_part` after the body end still finds the next part.
+        let p = r.next_part().unwrap().unwrap();
+        assert_eq!(p.disposition_raw(), None);
+    }
+
+    #[test]
+    fn next_part_from_any_position() {
+        // Mid-body: the rest of part 1 is skipped.
+        let mut r = reader::<1024>(PARTS_BODY, 4, None);
+        r.next_part().unwrap().unwrap();
+        assert!(r.next_chunk().unwrap().is_some());
+        assert_eq!(r.next_part().unwrap().unwrap().name().unwrap(), "firmware");
+
+        // Mid-headers: headers already consumed with `next_event` are missed.
+        let mut r = reader::<1024>(PARTS_BODY, 4, None);
+        assert_eq!(r.next_event(), Ok(Event::PartStart));
+        assert!(matches!(r.next_event(), Ok(Event::Header { .. })));
+        let p = r.next_part().unwrap().unwrap();
+        assert_eq!(p.disposition_raw(), None);
+        // After `PartStart` alone nothing is missed.
+        let mut r = reader::<1024>(PARTS_BODY, 4, None);
+        assert_eq!(r.next_event(), Ok(Event::PartStart));
+        assert_eq!(r.next_part().unwrap().unwrap().name().unwrap(), "version");
+        // Before any part, `next_chunk` and `read` have nothing to give.
+        let mut r = reader::<1024>(PARTS_BODY, 4, None);
+        assert_eq!(r.next_chunk(), Ok(None));
+        assert_eq!(r.read(&mut [0; 4]), Ok(0));
+    }
+
+    /// `read_body` for every read size: exact fit, too small (nothing lost),
+    /// and after a partial `read`.
+    #[test]
+    fn read_body_all_read_sizes() {
+        for max in 1..=PARTS_BODY.len() {
+            let mut r = reader::<32>(PARTS_BODY, max, None);
+            r.next_part().unwrap().unwrap();
+            let mut exact = [0u8; 5];
+            assert_eq!(r.read_body(&mut exact), Ok(Some(5)), "max {max}");
+            assert_eq!(&exact, b"1.2.3");
+            assert_eq!(r.read_body(&mut exact), Ok(Some(0)), "body is over");
+
+            r.next_part().unwrap().unwrap();
+            let mut small = [0u8; 3];
+            assert_eq!(r.read_body(&mut small), Ok(None), "max {max}");
+            assert_eq!(&small, b"hel");
+            let mut rest = Vec::new();
+            while let Some(c) = r.next_chunk().unwrap() {
+                rest.extend_from_slice(c);
+            }
+            assert_eq!(rest, b"lo\r\nworld", "max {max}");
+
+            let p = r.next_part().unwrap().unwrap();
+            assert!(p.name().is_none());
+            let mut big = [0u8; 8];
+            assert_eq!(r.read_body(&mut big), Ok(Some(0)), "empty body");
+
+            r.next_part().unwrap().unwrap();
+            assert_eq!(r.read(&mut small[..1]), Ok(1));
+            assert_eq!(r.read_body(&mut big), Ok(Some(0)), "x was read already");
+            assert_eq!(r.read_body(&mut []), Ok(Some(0)));
+            assert!(r.next_part().unwrap().is_none());
+        }
+        // Zero-length `out` with a non-empty body: nothing fits. (8 reads of 7
+        // bytes end exactly with the first part's headers.)
+        let mut r = reader::<32>(PARTS_BODY, 7, Some(8));
+        r.next_part().unwrap().unwrap();
+        assert_eq!(r.read_body(&mut []), Ok(None));
+        // I/O error inside read_body.
+        assert_eq!(r.read_body(&mut [0; 16]), Err(ReadError::Io(Boom)));
+    }
+
+    #[test]
+    fn sizes_are_documented() {
+        use core::mem::size_of;
+        assert_eq!(size_of::<PartInfo<256>>(), 256 + 2 * size_of::<usize>());
+        assert_eq!(size_of::<PartInfo<64>>(), 64 + 2 * size_of::<usize>());
+        // README "How much memory?", measured with a zero-sized reader.
+        struct Zst;
+        impl embedded_io::ErrorType for Zst {
+            type Error = Boom;
+        }
+        impl Read for Zst {
+            fn read(&mut self, _: &mut [u8]) -> Result<usize, Boom> {
+                Ok(0)
+            }
+        }
+        let big = size_of::<MultipartReader<'static, Zst, 1024, 512, 16>>();
+        let small = size_of::<MultipartReader<'static, Zst, 256, 128, 8>>();
+        println!("MultipartReader 1024/512: {big} B, 256/128: {small} B");
+        if size_of::<usize>() == 8 {
+            assert_eq!(big, 1648);
+            assert_eq!(small, 496);
+        }
+    }
+
+    #[test]
+    fn read_exact_on_a_part() {
+        let mut r = reader::<32>(PARTS_BODY, 5, None);
+        r.next_part().unwrap().unwrap();
+        let mut v = [0u8; 5];
+        r.read_exact(&mut v).unwrap();
+        assert_eq!(&v, b"1.2.3");
+        assert_eq!(
+            r.read_exact(&mut [0u8; 1]),
+            Err(ReadExactError::UnexpectedEof)
+        );
+    }
+
+    #[test]
+    fn errors_propagate() {
+        // I/O error while looking for the first part / while reading a body.
+        let mut r = reader::<32>(PARTS_BODY, 5, Some(0));
+        assert_eq!(r.next_part(), Err(ReadError::Io(Boom)));
+        let mut r = reader::<32>(PARTS_BODY, 5, Some(11));
+        r.next_part().unwrap().unwrap();
+        let err = loop {
+            match r.next_chunk() {
+                Ok(Some(_)) => {}
+                other => break other,
+            }
+        };
+        assert_eq!(err, Err(ReadError::Io(Boom)));
+        let mut r = reader::<32>(PARTS_BODY, 5, Some(11));
+        r.next_part().unwrap().unwrap();
+        let err = loop {
+            match r.read(&mut [0; 2]) {
+                Ok(n) if n > 0 => {}
+                other => break other,
+            }
+        };
+        assert_eq!(err, Err(ReadError::Io(Boom)));
+        // Parse error.
+        let mut r = reader::<32>(b"--b\r\nbad\r\n", 3, None);
+        assert_eq!(r.next_part(), Err(ReadError::Parse(Error::Header)));
+        // Truncated body.
+        let mut r = reader::<32>(b"--b\r\n\r\nxyz", 3, None);
+        r.next_part().unwrap().unwrap();
+        let mut body = Vec::new();
+        let err = loop {
+            match r.next_chunk() {
+                Ok(Some(d)) => body.extend_from_slice(d),
+                other => break other,
+            }
+        };
+        assert_eq!(body, b"xyz");
+        assert_eq!(err, Err(ReadError::Parse(Error::UnexpectedEof)));
+    }
+
+    #[test]
+    fn error_kinds() {
+        assert_eq!(ReadError::Io(Boom).kind(), ErrorKind::Other);
+        assert_eq!(
+            ReadError::<Boom>::Parse(Error::Header).kind(),
+            ErrorKind::InvalidData
+        );
+        assert_eq!(
+            ReadError::<Boom>::BufferTooSmall.kind(),
+            ErrorKind::OutOfMemory
+        );
+        let _: PartInfo<96>;
+    }
+}
+
+#[cfg(feature = "embedded-io-async")]
+mod async_parts {
+    use super::asynch::AsyncChunky;
+    use super::*;
+    use embedded_io_async::{Error as _, ErrorKind, Read, ReadExactError};
+    use nostd_multipart::MultipartReaderAsync;
+
+    fn reader<const BUF: usize>(
+        data: &[u8],
+        max: usize,
+        reads_left: Option<usize>,
+    ) -> MultipartReaderAsync<'static, AsyncChunky<'_>, BUF, 96, 4> {
+        MultipartReaderAsync::new(
+            AsyncChunky(Chunky {
+                data,
+                max,
+                reads_left,
+            }),
+            parts_parser(),
+        )
+    }
+
+    async fn walk<const BUF: usize>(max: usize) -> Result<(), ReadError<Boom>> {
+        let mut r = reader::<BUF>(PARTS_BODY, max, None);
+        let p = r.next_part().await?.unwrap();
+        assert_eq!(p.name().unwrap(), "version");
+        let mut small = [0u8; 2];
+        assert_eq!(r.read_body(&mut small).await?, None);
+        assert_eq!(&small, b"1.");
+        let mut body = Vec::new();
+        while let Some(chunk) = r.next_chunk().await? {
+            body.extend_from_slice(chunk);
+        }
+        assert_eq!(body, b"2.3");
+        assert_eq!(r.next_chunk().await?, None);
+        assert_eq!(r.read_body(&mut small).await?, Some(0));
+
+        let p = r.next_part().await?.unwrap();
+        assert_eq!(p.filename().unwrap(), "a.bin");
+        let mut body = Vec::new();
+        let mut buf = [0u8; 3];
+        loop {
+            let n = r.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(body, b"hello\r\nworld");
+
+        let p = r.next_part().await?.unwrap();
+        assert_eq!(p.disposition_raw(), None);
+        assert_eq!(r.next_chunk().await?, None);
+        let p = r.next_part().await?.unwrap();
+        assert!(p.disposition().is_none());
+        assert!(r.next_part().await?.is_none());
+        assert!(r.next_part().await?.is_none());
+        assert_eq!(r.read(&mut buf).await?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn all_read_sizes() {
+        futures::executor::block_on(async {
+            for max in 1..=PARTS_BODY.len() {
+                walk::<16>(max)
+                    .await
+                    .unwrap_or_else(|e| panic!("BUF 16, max {max}: {e}"));
+                walk::<256>(max)
+                    .await
+                    .unwrap_or_else(|e| panic!("BUF 256, max {max}: {e}"));
+            }
+        });
+    }
+
+    #[test]
+    fn mixing_and_errors() {
+        futures::executor::block_on(async {
+            let mut r = reader::<1024>(PARTS_BODY, usize::MAX, None);
+            assert_eq!(r.next_chunk().await, Ok(None), "before any part");
+            assert_eq!(r.read(&mut [0; 4]).await, Ok(0));
+            r.next_part().await.unwrap().unwrap();
+            assert_eq!(r.next_event().await, Ok(Event::Data(b"1.2.3")));
+            assert_eq!(r.read(&mut [0; 8]).await, Ok(0));
+            r.next_part().await.unwrap().unwrap();
+            assert_eq!(r.read(&mut []).await, Ok(0));
+            let mut two = [0u8; 2];
+            assert_eq!(r.read(&mut two).await, Ok(2));
+            assert_eq!(&two, b"he");
+            assert_eq!(r.next_chunk().await, Ok(Some(&b"llo\r\nworld"[..])));
+            assert_eq!(r.next_chunk().await, Ok(None));
+            // Skip part 3 from inside its headers.
+            assert_eq!(r.next_event().await, Ok(Event::PartStart));
+            assert!(matches!(r.next_event().await, Ok(Event::Header { .. })));
+            let p = r.next_part().await.unwrap().unwrap();
+            assert_eq!(p.disposition_raw(), None);
+            let p = r.next_part().await.unwrap().unwrap();
+            assert_eq!(p.disposition_raw(), Some(&b";;; bad"[..]));
+            let mut one = [0u8; 1];
+            r.read_exact(&mut one).await.unwrap();
+            assert_eq!(&one, b"x");
+            assert_eq!(
+                r.read_exact(&mut one).await,
+                Err(ReadExactError::UnexpectedEof)
+            );
+
+            let mut r = reader::<32>(PARTS_BODY, 5, Some(0));
+            assert_eq!(r.next_part().await, Err(ReadError::Io(Boom)));
+            let mut r = reader::<32>(PARTS_BODY, 7, Some(8));
+            r.next_part().await.unwrap().unwrap();
+            assert_eq!(r.read_body(&mut [0; 16]).await, Err(ReadError::Io(Boom)));
+            let mut r = reader::<32>(PARTS_BODY, 5, Some(11));
+            r.next_part().await.unwrap().unwrap();
+            let err = loop {
+                match r.read(&mut [0; 2]).await {
+                    Ok(n) if n > 0 => {}
+                    other => break other,
+                }
+            };
+            assert_eq!(err, Err(ReadError::Io(Boom)));
+            let mut r = reader::<32>(PARTS_BODY, 5, Some(11));
+            r.next_part().await.unwrap().unwrap();
+            let err = loop {
+                match r.next_chunk().await {
+                    Ok(Some(_)) => {}
+                    other => break other,
+                }
+            };
+            assert_eq!(err, Err(ReadError::Io(Boom)));
+            let mut r = reader::<32>(b"--b\r\nbad\r\n", 3, None);
+            assert_eq!(r.next_part().await, Err(ReadError::Parse(Error::Header)));
+
+            assert_eq!(ReadError::Io(Boom).kind(), ErrorKind::Other);
+            assert_eq!(
+                ReadError::<Boom>::Parse(Error::Header).kind(),
+                ErrorKind::InvalidData
+            );
+            assert_eq!(
+                ReadError::<Boom>::BufferTooSmall.kind(),
+                ErrorKind::OutOfMemory
+            );
         });
     }
 }

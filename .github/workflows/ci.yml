@@ -84,7 +84,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo install cargo-fuzz --locked
       - run: |
-          for t in parse_chunked roundtrip headers adapter; do
+          for t in parse_chunked roundtrip headers adapter parts; do
             cargo fuzz run "$t" -- -max_total_time=60 -max_len=4096
           done
         working-directory: fuzz

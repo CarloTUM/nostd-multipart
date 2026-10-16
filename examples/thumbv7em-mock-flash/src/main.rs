@@ -11,7 +11,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embedded_io::{ErrorType, Read};
-use nostd_multipart::{content_disposition, Event, MultipartReader, Parser, ReadError};
+use nostd_multipart::{MultipartReader, Parser, ReadError};
 
 const PAGE: usize = 256;
 const PAGES: usize = 16;
@@ -98,27 +98,18 @@ const BODY: &[u8] = b"------ota-7f3e\r\nContent-Disposition: form-data; name=\"v
 fn receive(flash: &mut MockFlash) -> Result<u32, ReadError<core::convert::Infallible>> {
     let parser: Parser<'_, 128, 8> = Parser::from_content_type(CONTENT_TYPE)?;
     let mut reader = MultipartReader::<_, 256, 128, 8>::new(Socket { body: BODY }, parser);
-    let mut in_firmware = false;
     let mut written: u32 = 0;
-    loop {
-        match reader.next_event()? {
-            Event::PartStart => in_firmware = false,
-            Event::Header { name, value } if name.eq_ignore_ascii_case(b"content-disposition") => {
-                if let Ok(cd) = content_disposition(value) {
-                    in_firmware = cd.name().is_some_and(|n| n == "firmware");
-                }
-            }
-            Event::Data(d) if in_firmware => {
-                flash.write(d).map_err(|_| ReadError::BufferTooSmall)?;
-                written += d.len() as u32;
-            }
-            Event::PartEnd if in_firmware => {
-                flash.flush().map_err(|_| ReadError::BufferTooSmall)?
-            }
-            Event::Finished => return Ok(written),
-            _ => {}
+    while let Some(part) = reader.next_part()? {
+        if !part.name().is_some_and(|n| n == "firmware") {
+            continue; // other fields are skipped by the next `next_part`
         }
+        while let Some(chunk) = reader.next_chunk()? {
+            flash.write(chunk).map_err(|_| ReadError::BufferTooSmall)?;
+            written += chunk.len() as u32;
+        }
+        flash.flush().map_err(|_| ReadError::BufferTooSmall)?;
     }
+    Ok(written)
 }
 
 #[no_mangle]
