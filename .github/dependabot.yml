@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    ignore:
+      # `dtolnay/rust-toolchain@1.81` pins the MSRV toolchain, not an action
+      # version; Dependabot would otherwise bump it to the newest Rust tag.
+      - dependency-name: dtolnay/rust-toolchain
   - package-ecosystem: cargo
     directory: /
     schedule:
